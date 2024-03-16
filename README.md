@@ -209,3 +209,254 @@ DBConnectionUtil - get connection=conn0: url=jdbc:h2:tcp://localhost/~/test
 
 
 
+## JDBC 개발 - 등록, 조회, 수정, 삭제
+
+JDBC를 사용해서 회원(`Member`) 데이터를 데이터베이스에 관리하는 기능을 개발한다.
+
+> 해당 실습을 진행하기 위해선 데이터베이스에 member 테이블이 먼저 생성되어 있어야 한다.
+
+
+
+[Member] - member 테이블에 데이터를 저장하고 조회할 때 사용한다.
+
+* 회원의 ID와 해당 회원이 소지한 금액을 표현하는 클래스
+
+```java
+package hello.jdbc.domain;
+
+import lombok.Data;
+
+@Data
+public class Member {
+
+    private String memberId;
+    private int money;
+
+    public Member() {
+    }
+
+    public Member(String memberId, int money) {
+        this.memberId = memberId;
+        this.money = money;
+    }
+}
+```
+
+
+
+[MemberRepositoryV0] - 회원 등록(JDBC를 사용하여 데이터베이스에 저장)
+
+* `getConnection()`: 이전에 만들어 둔 `DBConnectionUtil`를 통해 데이터베이스 커넥션을 획득한다.
+* `con.prepareStatement(sql);`: 데이터베이스에 전달한 SQL과 파라미터로 전달할 데이터들을 준비한다.
+* `pstmt.executeUpdate();`: `Statement`를 통해 준비된 SQL을 커넥션을 통해 실제 데이터베이스에 전달한다.
+* `pstmt.executeQuery();`: 데이터를 조회할 땐 해당 메서드를 사용하며, 반환 결과로 `ResultSet`에 담아 반환한다.
+* `ResultSet`은 내부에 있는 커서를 이동해서 다음 데이터를 조회할 수 있다.
+  * `rs.next()`: 최초의 커서는 데이터를 가리키고 있지 않기 때문에 `rs.next`를 최초 한번은 호출해야 데이터를 조회 가능하다.
+
+```java
+package hello.jdbc.repository;
+
+import hello.jdbc.connection.DBConnectionUtil;
+import hello.jdbc.domain.Member;
+import lombok.extern.slf4j.Slf4j;
+
+import java.sql.*;
+import java.util.NoSuchElementException;
+
+@Slf4j
+public class MemberRepositoryV0 {
+
+    private static Connection getConnection() {
+        return DBConnectionUtil.getConnection();
+    }
+
+    public Member save(Member member) throws SQLException {
+        String sql = "insert into member (member_id, money) values (?, ?)";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, member.getMemberId());
+            pstmt.setInt(2, member.getMoney());
+            pstmt.executeUpdate();
+            return member;
+
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        }
+    }
+
+    public Member findById(String memberId) throws SQLException {
+        String sql = "select * from member where member_id = ?";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+        ResultSet rs = null;
+
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, memberId);
+            rs = pstmt.executeQuery();
+
+            if (rs.next()) {
+                Member member = new Member();
+                member.setMemberId(rs.getString("member_id"));
+                member.setMoney(rs.getInt("money"));
+                return member;
+            } else {
+                throw new NoSuchElementException("member not found memberId = {}" + memberId);
+            }
+
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        } finally {
+            close(con, pstmt, rs);
+        }
+    }
+
+    public void update(String memberId, int money) throws SQLException {
+        String sql = "update member set money = ? where member_id = ?";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setInt(1, money);
+            pstmt.setString(2, memberId);
+            int resultSize = pstmt.executeUpdate();
+            log.info("resultSize = {}", resultSize);
+
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        } finally {
+            close(con, pstmt, null);
+
+        }
+    }
+
+    public void delete(String memberId) throws SQLException {
+        String sql = "delete from member where member_id = ?";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, memberId);
+            pstmt.executeUpdate();
+
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        }
+    }
+
+    private void close(Connection con, Statement stmt, ResultSet rs) {
+        if (rs != null) {
+            try {
+                rs.close();
+            } catch (SQLException e) {
+                log.info("error", e);
+            }
+        }
+
+        if (stmt != null) {
+            try {
+                stmt.close();
+            } catch (SQLException e) {
+                log.info("error", e);
+            }
+        }
+
+        if (con != null) {
+            try {
+                con.close();
+            } catch (SQLException e) {
+                log.info("error", e);
+            }
+        }
+
+    }
+}
+
+```
+
+
+
+#### 리소스 정리
+
+* 리소스 정리를 하지 않게 되면, 리소스 누수가 발생하게 되는데 결과적으로 커넥션 부족으로 장애가 발생할 수 있다.
+* 따라서 리소스는 항상 수행해야하므로 `finally` 키워드에 작성해야하며, 리소스를 정리해야 할 땐 생성된 순서의 역순으로 자원을 해제해야 한다. 
+  * 위의 예제에서는 `Connection`을 통해 `PreparedStatement`을 만들었기 때문에 리소스를 반환할 땐 `PreparedStatement -> Connection` 순으로 리소스를 해제해야한다.
+
+
+
+#### 참고
+
+`PreparedStatement`는 `Statement`의 자식 타입인데, `?`를 통한 파라미터 바인딩을 가능하게 해준다.
+<u>SQL Injection 공격을 예방하려면 `PreparedStatement`를 통한 파라미터 바인딩 방식을 사용해야한다.</u>
+
+
+
+[MemberRepositoryV0Test] - 회원 등록, 조회, 수정, 삭제
+
+```java
+package hello.jdbc.repository;
+
+import hello.jdbc.domain.Member;
+import lombok.extern.slf4j.Slf4j;
+import org.assertj.core.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
+
+import java.sql.SQLException;
+import java.util.NoSuchElementException;
+
+import static org.assertj.core.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+@Slf4j
+class MemberRepositoryV0Test {
+
+    MemberRepositoryV0 repository = new MemberRepositoryV0();
+
+    @Test
+    void crud() throws SQLException {
+        Member member = new Member("memberV3", 10000);
+        repository.save(member);
+
+        // findById
+        Member findMember = repository.findById(member.getMemberId());
+        log.info("findMember = {}", findMember);
+        assertThat(findMember).isEqualTo(member);
+
+        // update: money: 10000 -> 20000
+        repository.update(member.getMemberId(), 20000);
+        Member updateMember = repository.findById(member.getMemberId());
+        assertThat(updateMember.getMoney()).isEqualTo(20000);
+
+        // delete
+        repository.delete(member.getMemberId());
+        assertThatThrownBy(() -> repository.findById(member.getMemberId())).isInstanceOf(NoSuchElementException.class);
+    }
+}
+```
+
+
+
+#### 참고
+
+<u>테스트는 반복해서 실행 가능한 것이 중요하다.</u>
+테스트 중간에 오류가 발생해서 삭제 로직을 수행할 수 없다면 테스트를 반복해서 실행할 수 없다.
+따라서 해당 코드는 좋은 코드라 볼 수 없고, 트랜잭션을 활용하면 문제를 깔끔히 해결할 수 있다고 한다.
