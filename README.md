@@ -671,6 +671,7 @@ public class ConnectionTest {
 
 * [MyPool connection adder] - 커넥션 풀에 커넥션을 채우기 위한 별도의 쓰레드
 * [Test worker] - Test를 수행하는 쓰레드
+* 커넥션 획득에 로그를 보면 `com.zaxxer.hikari.pool.HikariProxyConnection` 클래스를 사용하고 있는데, 해당 클래스는 `HikariCP` 커넥션 풀에서 관리하는 실제 커넥션이며, wrapping 형태로 안에 JDBC 커넥션을 포함하고 있다.
 
 ```cmd
 # 커넥션 풀 초기화 정보 출력
