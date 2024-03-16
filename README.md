@@ -92,5 +92,120 @@ JDBC로 인해 많은 것이 편해졌지만 여전히 사용하는 방법이 �
 
 
 
+## 데이터베이스 연결
+
+> H2 데이터베이스를 사용하였다.
+
+
+
+[ConnectionConst] - 데이터베이스에 접속하는데 필요한 기본 정보를 상수로 정의
+
+```java
+package hello.jdbc.connection;
+
+public abstract class ConnectionConst {
+    public static final String URL = "jdbc:h2:tcp://localhost/~/test";
+    public static final String USERNAME = "sa";
+    public static final String PASSWORD = "";
+}
+```
+
+
+
+[DBConnectionUtil] - JDBC를 사용해서 실제 데이터베이스에 연결하는 코드
+
+* `DriverManager.getConnection()`: 데이터베이스에 연결하려면 JDBC가 제공하는 해당 메서드를 사용하면 된다.
+  * 해당 메서드를 사용하면 데이터베이스 드라이버를 찾아서 <u>해당 드라이버가 제공하는 커넥션을 반환해준다.</u>
+  * 여기서는 H2 데이터베이스 드라이버가 작동해서 실제 데이터베이스와 커넥션을 맺고 그 결과를 반환해준다.
+
+```java
+package hello.jdbc.connection;
+
+import lombok.extern.slf4j.Slf4j;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+
+import static hello.jdbc.connection.ConnectionConst.*;
+
+/**
+ * JDBC를 사용해서 실제 데이터베이스에 연결하는 코드
+ */
+@Slf4j
+public class DBConnectionUtil {
+
+    public static Connection getConnection() {
+        try {
+            Connection connection = DriverManager.getConnection(URL, USERNAME, PASSWORD);
+            log.info("get connection = {}, class = {}", connection, connection.getClass());
+            return connection;
+
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+}
+```
+
+
+
+[DBConnectionUtilTest] - 데이터베이스 연결 테스트
+
+```java
+package hello.jdbc.connection;
+
+import lombok.extern.slf4j.Slf4j;
+import org.assertj.core.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import java.sql.Connection;
+
+import static org.assertj.core.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+@Slf4j
+class DBConnectionUtilTest {
+
+    @Test
+    void connection() {
+        Connection connection = DBConnectionUtil.getConnection();
+        assertThat(connection).isNotNull();
+    }
+}
+```
+
+
+
+실행 결과
+
+* `class=class org.h2.jdbc.JdbcConnection`: H2 데이터베이스 드라이버가 제공하는 H2 전용 커넥션이다.
+  * 물론 이 커넥션은 JDBC 표준 커넥션 인터페이스인 `java.sql.Connection` 인터페이스를 구현하고 있음
+
+```cmd
+DBConnectionUtil - get connection=conn0: url=jdbc:h2:tcp://localhost/~/test
+ user=SA, class=class org.h2.jdbc.JdbcConnection
+```
+
+
+
+### JDBC DriverManager 연결 이해
+
+다형성처럼 각 벤더사의 JDBC 드라이버는 `java.sql.Connection` 표준 커넥션 인터페이스를 구현체를 제공하고 있다.
+
+#### DriverManager 커넥션 요청 흐름
+
+![스크린샷 2024-03-16 오후 3 26 44](https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/a4b30017-0fef-424f-abf4-0800a9d2bd80)
+
+**JDBC가 제공하는 `DriverManager`는 라이브러리에 등록된 DB 드라이버들을 관리하고, 커넥션을 획득하는 기능을 제공한다.**
+
+1. 애플리케이션 로직에서 커넥션이 필요하면 `DriverManager.getConnection()`dmf ghcnf
+2. DriverManager는 라이브러리에 등록된 드라이버 목록을 자동으로 인식한다. 이 드라이버들에게 순서대로 다음 정보를 넘겨 커넥션을 획득할 수 있는지 확인한다.
+   * URL: 예) `jdbc:h2:tcp://localhost/~/test`
+   * 이름, 비밀번호 등 접속에 필요한 추가 정보
+   * 각각의 드라이버는 URL 정보를 체크해서 자신이 처리할 수 있는 요청인지 확인한다. 드라이버 자신이 처리할 수 있는 요청이면 실제 데이터베이스에 연결해서 커넥션을 획득하고 이 커넥션을 클라이언트에게 반환한다.
+     * 예를 들어 `jdbc:h2`로 시작하면 h2 데이터베이스에 접근하기 위한 규칙이다.
+3. 이렇게 찾은 커넥션을 클라이언트에게(애플리케이션) 반환한다.
+
 
 
