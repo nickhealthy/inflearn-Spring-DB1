@@ -604,3 +604,110 @@ public class ConnectionTest {
 
 
 
+## DataSource 예제2 - 커넥션 풀
+
+이번에는 `DataSource`를 통해 커넥션 풀을 사용하는 예제를 해보자
+
+
+
+[ConnectionTest] - 데이터소스 커넥션 풀 추가
+
+* 커넥션 풀에서 커넥션을 생성하는 작업은 애플리케이션 실행 속도에 영향을 주지 않기 위해 별도의 쓰레드에서 작동한다.
+  * 만약 애플리케이션에서 커넥션 풀을 생성하기 위해 같은 쓰레드를 사용한다면, 커넥션 풀을 모두 생성하기 위해서 애플리케이션은 동작하지 않을 것이다.
+* 커넥션 풀 최대 사이즈를 10으로 지정하고, 풀의 이름을 `MyPool`이라고 지정했다.
+
+```java
+package hello.jdbc.connection;
+
+import com.zaxxer.hikari.HikariDataSource;
+import lombok.extern.slf4j.Slf4j;
+import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+
+import static hello.jdbc.connection.ConnectionConst.*;
+
+@Slf4j
+public class ConnectionTest {
+
+    /**
+     * HikariCP를 사용하여 커넥션 풀을 획득하는 방법
+     * - 커넥션 풀에서 커넥션을 생성하는 작업은 애플리케이션 실행 속도에 영향을 주지 않기 위해 별도의 쓰레드에서 작동한다.
+     * @throws SQLException
+     * @throws InterruptedException
+     */
+    @Test
+    void dataSourceConnectionPool() throws SQLException, InterruptedException {
+        // 커넥션 풀링: HikariProxyConnection(Proxy) -> JdbcConnection(Target)
+        HikariDataSource dataSource = new HikariDataSource();
+        dataSource.setJdbcUrl(URL);
+        dataSource.setUsername(USERNAME);
+        dataSource.setPassword(PASSWORD);
+        dataSource.setMaximumPoolSize(10);
+        dataSource.setPoolName("MyPool");
+
+        useDataSource(dataSource);
+        Thread.sleep(1000); // 커넥션 풀에서 커넥션 생성 시간 대기
+
+    }
+
+    private void useDataSource(DataSource dataSource) throws SQLException {
+        Connection con1 = dataSource.getConnection();
+        Connection con2 = dataSource.getConnection();
+        log.info("connection = {}, class = {}", con1, con1.getClass());
+        log.info("connection = {}, class = {}", con2, con2.getClass());
+
+    }
+}
+```
+
+
+
+#### 실행 결과
+
+* [MyPool connection adder] - 커넥션 풀에 커넥션을 채우기 위한 별도의 쓰레드
+* [Test worker] - Test를 수행하는 쓰레드
+
+```cmd
+# 커넥션 풀 초기화 정보 출력
+20:37:39.612 [Test worker] DEBUG com.zaxxer.hikari.HikariConfig --
+                MyPool - configuration:
+20:37:39.621 [Test worker] DEBUG com.zaxxer.hikari.HikariConfig --
+                jdbcUrl.........................jdbc:h2:tcp://localhost/~/test
+20:37:39.622 [Test worker] DEBUG com.zaxxer.hikari.HikariConfig --
+                minimumIdle.....................10
+20:37:39.622 [Test worker] DEBUG com.zaxxer.hikari.HikariConfig --
+                password........................<masked>
+20:37:39.622 [Test worker] DEBUG com.zaxxer.hikari.HikariConfig --
+                poolName........................"MyPool"
+
+
+# 커넥션 풀 전용 쓰레드가 커넥션 풀에 커넥션을 10개 채움
+20:37:39.669 [Test worker] INFO  com.zaxxer.hikari.HikariDataSource --
+                MyPool - Start completed.
+20:37:39.675 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool --
+                MyPool - Added connection conn1: url=jdbc:h2:tcp://localhost/~/test user=SA
+20:37:39.692 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool --
+                MyPool - Added connection conn2: url=jdbc:h2:tcp://localhost/~/test user=SA
+20:37:39.774 [MyPool housekeeper] DEBUG com.zaxxer.hikari.pool.HikariPool --
+                MyPool - Pool stats (total=8, active=2, idle=6, waiting=0)
+20:37:39.789 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool --
+                MyPool - Added connection conn8: url=jdbc:h2:tcp://localhost/~/test user=SA
+20:37:39.807 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool --
+                MyPool - Added connection conn9: url=jdbc:h2:tcp://localhost/~/test user=SA
+
+# 커넥션 풀에서 커넥션 획득 1
+20:37:39.675 [Test worker] INFO  h.jdbc.connection.ConnectionTest --
+                connection = HikariProxyConnection@379121284 wrapping conn0: url=jdbc:h2:tcp://localhost/~/test user=SA, class = class com.zaxxer.hikari.pool.HikariProxyConnection
+                
+# 커넥션 풀에서 커넥션 획득 2
+20:37:39.677 [Test worker] INFO  h.jdbc.connection.ConnectionTest --
+                connection = HikariProxyConnection@2031377754 wrapping conn1: url=jdbc:h2:tcp://localhost/~/test user=SA, class = class com.zaxxer.hikari.pool.HikariProxyConnection
+```
+
+
+
