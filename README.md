@@ -507,3 +507,29 @@ class MemberRepositoryV0Test {
 
 
 
+## DataSource 이해
+
+커넥션을 얻는 방법은 JDBC `DriverManager`를 직접 사용하거나, 커넥션 풀을 사용하는 등 다양한 방법이 존재한다.
+
+![스크린샷 2024-03-16 오후 8 07 59](https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/e1a5058e-de00-439f-baaa-d0713191825c)
+
+
+
+
+
+애플리케이션 로직에서 `DriverManager`를 사용하다가 `HikariCP` 같은 커넥션 풀을 사용하도록 변경하려면 애플리케이션 코드도 함께 변경해야 한다. 의존관계가 `DriverManager`에서 `HikariCP`로 변경되기 때문이다.
+
+* 자바에서는 이러한 문제를 해결하기 위해 `DataSource`라는 제공하며, **커넥션을 획득하는 방법을 추상화** 하는 인터페이스이다.
+
+![스크린샷 2024-03-16 오후 8 09 50](https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/8bd61e92-69f9-4845-b56a-416e3d2dc3e1)
+
+
+
+#### 정리
+
+* 대부분의 커넥션 풀은 `DataSource` 인터페이스를 이미 구현했으므로, 애플리케이션은 `DataSource` 인터페이스에만 의존하도록 구현하면 된다.
+  * 다른 커넥션 풀을 사용하고 싶다면 해당 구현체로 갈아끼우기만 하면 된다. 
+* `DriverManager`는 `DataSource`를 인터페이스로 사용하지 않아 직접 고쳐야했는데, 스프링은 이런 문제를 해결하기 위해 `DriverManagerDataSource`라는 `DataSource`를 구현한 클래스를 제공한다.
+
+
+
