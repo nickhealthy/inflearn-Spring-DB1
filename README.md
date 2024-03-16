@@ -712,3 +712,188 @@ public class ConnectionTest {
 
 
 
+## DataSource 적용
+
+이번에는 애플리케이션에 `DataSource` 를 적용해보자.
+
+
+
+[MemberRepositoryV1] - `DataSource`를 통해 의존성 주입, `JdbcUtils` 사용으로 close 간소화
+
+* 외부에서 `DataSource`를 주입 받아 사용하기 때문에 `DriverManagerDataSource, HikariDataSource`를 변경해서 사용하더라도 코드의 변경이 없다. (<u>DI + OCP</u>)
+* 스프링에서 제공하는 `JdbcUtils` 사용으로 JDBC를 더 간편하게 사용할 수 있다.
+
+```java
+package hello.jdbc.repository;
+
+import hello.jdbc.connection.DBConnectionUtil;
+import hello.jdbc.domain.Member;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.support.JdbcUtils;
+
+import javax.sql.DataSource;
+import java.sql.*;
+import java.util.NoSuchElementException;
+
+/**
+ * JDBC - DataSource 사용, JdbcUtils 사용
+ * - 스프링은 JDBC를 편리하게 다룰 수 있는 JdbcUtils라는 편의 메서드를 제공한다.
+ * - JdbcUtils을 사용하면 커넥션을 좀 더 편리하게 close 할 수 있다.
+ */
+@Slf4j
+public class MemberRepositoryV1 {
+
+    private final DataSource dataSource;
+
+    // 외부에서 DataSource를 주입 받아서 사용한다. 이를 통해 구현체가 달라지더라도 코드를 변경할 일이 없다.
+    public MemberRepositoryV1(DataSource dataSource) {
+        this.dataSource = dataSource;
+    }
+
+    private Connection getConnection() throws SQLException {
+        Connection con = dataSource.getConnection();
+        log.info("get connection = {}, class = {}", con, con.getClass());
+        return con;
+    }
+
+  	// save()
+  	// findById()
+  	// update()
+  	// delete()
+
+    private void close(Connection con, Statement stmt, ResultSet rs) {
+        JdbcUtils.closeResultSet(rs);
+        JdbcUtils.closeStatement(stmt);
+        JdbcUtils.closeConnection(con);
+
+    }
+}
+```
+
+
+
+[MemberRepositoryV1Test] - `DataSource` 사용 테스트
+
+
+
+```java
+package hello.jdbc.repository;
+
+import hello.jdbc.domain.Member;
+import lombok.extern.slf4j.Slf4j;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+
+import javax.sql.DataSource;
+import java.sql.Driver;
+import java.sql.SQLException;
+import java.util.NoSuchElementException;
+
+import static hello.jdbc.connection.ConnectionConst.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+@Slf4j
+class MemberRepositoryV1Test {
+
+    MemberRepositoryV1 repository;
+
+    @BeforeEach
+    void beforeEach() {
+        // 기본 DriverManager - 항상 새로운 커넥션 획득
+        DriverManagerDataSource dataSource = new DriverManagerDataSource(URL, USERNAME, PASSWORD);
+        repository = new MemberRepositoryV1(dataSource);
+
+    }
+
+    @Test
+    void crud() throws SQLException {
+        Member member = new Member("memberV3", 10000);
+        repository.save(member);
+
+        // findById
+        Member findMember = repository.findById(member.getMemberId());
+        log.info("findMember = {}", findMember);
+        assertThat(findMember).isEqualTo(member);
+
+        // update: money: 10000 -> 20000
+        repository.update(member.getMemberId(), 20000);
+        Member updateMember = repository.findById(member.getMemberId());
+        assertThat(updateMember.getMoney()).isEqualTo(20000);
+
+        // delete
+        repository.delete(member.getMemberId());
+        assertThatThrownBy(() -> repository.findById(member.getMemberId())).isInstanceOf(NoSuchElementException.class);
+    }
+}
+```
+
+
+
+#### 실행 결과 - DriverManagerDataSource
+
+* 매번 새로운 커넥션을 획득하는 것을 확인할 수 있다.
+
+```cmd
+22:09:53.397 [Test worker] DEBUG o.s.j.d.DriverManagerDataSource --
+                Creating new JDBC DriverManager Connection to [jdbc:h2:tcp://localhost/~/test]
+22:09:53.442 [Test worker] INFO  h.jdbc.repository.MemberRepositoryV1 --
+                get connection = conn0: url=jdbc:h2:tcp://localhost/~/test user=SA, class = class org.h2.jdbc.JdbcConnection
+22:09:53.461 [Test worker] DEBUG o.s.j.d.DriverManagerDataSource --
+                Creating new JDBC DriverManager Connection to [jdbc:h2:tcp://localhost/~/test]
+22:09:53.463 [Test worker] INFO  h.jdbc.repository.MemberRepositoryV1 --
+                get connection = conn1: url=jdbc:h2:tcp://localhost/~/test user=SA, class = class org.h2.jdbc.JdbcConnection
+22:09:53.469 [Test worker] INFO  h.j.r.MemberRepositoryV1Test --
+                findMember = Member(memberId=memberV3, money=10000)
+22:09:53.491 [Test worker] DEBUG o.s.j.d.DriverManagerDataSource --
+                Creating new JDBC DriverManager Connection to [jdbc:h2:tcp://localhost/~/test]
+22:09:53.494 [Test worker] INFO  h.jdbc.repository.MemberRepositoryV1 --
+                get connection = conn2: url=jdbc:h2:tcp://localhost/~/test user=SA, class = class org.h2.jdbc.JdbcConnection
+22:09:53.496 [Test worker] INFO  h.jdbc.repository.MemberRepositoryV1 --
+                resultSize = 1
+22:09:53.496 [Test worker] DEBUG o.s.j.d.DriverManagerDataSource --
+                Creating new JDBC DriverManager Connection to [jdbc:h2:tcp://localhost/~/test]
+22:09:53.500 [Test worker] INFO  h.jdbc.repository.MemberRepositoryV1 --
+                get connection = conn3: url=jdbc:h2:tcp://localhost/~/test user=SA, class = class org.h2.jdbc.JdbcConnection
+22:09:53.507 [Test worker] DEBUG o.s.j.d.DriverManagerDataSource --
+                Creating new JDBC DriverManager Connection to [jdbc:h2:tcp://localhost/~/test]
+22:09:53.510 [Test worker] INFO  h.jdbc.repository.MemberRepositoryV1 --
+                get connection = conn4: url=jdbc:h2:tcp://localhost/~/test user=SA, class = class org.h2.jdbc.JdbcConnection
+22:09:53.511 [Test worker] DEBUG o.s.j.d.DriverManagerDataSource --
+                Creating new JDBC DriverManager Connection to [jdbc:h2:tcp://localhost/~/test]
+22:09:53.512 [Test worker] INFO  h.jdbc.repository.MemberRepositoryV1 --
+                get connection = conn5: url=jdbc:h2:tcp://localhost/~/test user=SA, class = class org.h2.jdbc.JdbcConnection
+
+```
+
+
+
+#### 실행 결과 - `HikariCP` 사용
+
+* `DriverManagerDataSource`와는 달리 커넥션을 사용하고 다시 커넥션 풀에 적재 후 재사용하기 때문에 쿼리를 처리하고 거의 같은 커넥션을 사용하는 것을 확인할 수 있다.
+
+```cmd
+22:19:11.238 [Test worker] INFO  h.jdbc.repository.MemberRepositoryV1 --
+                get connection = HikariProxyConnection@1594039997 wrapping conn1: url=jdbc:h2:tcp://localhost/~/test user=SA, class = class com.zaxxer.hikari.pool.HikariProxyConnection
+22:19:11.256 [Test worker] INFO  h.j.r.MemberRepositoryV1Test --
+                findMember = Member(memberId=memberV3, money=10000)
+                
+22:19:11.276 [Test worker] INFO  h.jdbc.repository.MemberRepositoryV1 --
+                get connection = HikariProxyConnection@659059448 wrapping conn1: url=jdbc:h2:tcp://localhost/~/test user=SA, class = class com.zaxxer.hikari.pool.HikariProxyConnection
+22:19:11.279 [Test worker] INFO  h.jdbc.repository.MemberRepositoryV1 --
+                resultSize = 1
+                
+22:19:11.279 [Test worker] INFO  h.jdbc.repository.MemberRepositoryV1 --
+                get connection = HikariProxyConnection@124494140 wrapping conn1: url=jdbc:h2:tcp://localhost/~/test user=SA, class = class com.zaxxer.hikari.pool.HikariProxyConnection
+
+22:19:11.281 [Test worker] INFO  h.jdbc.repository.MemberRepositoryV1 --
+                get connection = HikariProxyConnection@635288507 wrapping conn1: url=jdbc:h2:tcp://localhost/~/test user=SA, class = class com.zaxxer.hikari.pool.HikariProxyConnection
+                
+22:19:11.282 [Test worker] INFO  h.jdbc.repository.MemberRepositoryV1 --
+                get connection = HikariProxyConnection@593447952 wrapping conn2: url=jdbc:h2:tcp://localhost/~/test user=SA, class = class com.zaxxer.hikari.pool.HikariProxyConnection
+
+```
+
+
+
