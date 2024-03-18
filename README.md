@@ -1068,5 +1068,58 @@ commit; //수동 커밋
 
 
 
+## DB 락 - 개념 이해
+
+세션1과 세션2가 동시에 같은 데이터를 수정하고 싶은 경우가 있다. 이럴 때 어느 쪽에서 작업을 수행중인데 다른 세션에서 동일한 데이터를 변경하거나 롤백을 시도하는 경우 데이터 정합성에 문제가 발생할 수 있게 된다.
+
+이런 문제를 해결하기 위해 데이터베이스는 락(lock)이라는 개념을 제공한다.
+
+
+
+### 예제 - 락의 작동 방식
+
+<img width="692" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/7b5ccb61-c8dc-49a3-a50a-13621b24f41f">
+
+* 세션1이 트랜잭션을 시작한다. 먼저 들어온 요청이기 때문에 락을 선취한다.
+* 세션1은 memberA의 money를 500으로 수정하려고 한다.
+
+
+
+<img width="689" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/7bc8fe70-6fb0-4385-8352-022ad8ccaa30">
+
+* 세션2가 트랜잭션을 시도한다. 세션2도 memberA의 money를  1000으로 수정하려고 한다.
+* <u>이때 세션2는 락을 가질 수 없기 때문에 데이터 변경이 불가능하며, 락이 돌아올 때까지 대기하게 된다.</u>
+* 락을 가질 때까지 무한정 대기하는 것은 아니며, 락 대기 시간이 넘어가게 되면 락 타임아웃 오류가 발생하게 된다.
+
+
+
+<img width="693" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/a2cea4a2-3e2a-4e3b-a40b-5a7212b562b5">
+
+* 세션1은 트랜잭션 작업을 마치고 커밋을 수행하게 된다.
+
+
+
+<img width="695" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/40c4d7ba-2c1e-4e11-9a02-017e165e0388">
+
+* 트랜잭션이 종료되었으므로 락도 함께 반납하게 된다.
+
+
+
+<img width="699" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/7ef9cdfe-ccf6-47c1-8e38-dd4e2d16eff6">
+
+* 트랜잭션을 수행하기 위해 대기중이던 세션2가 락을 획득하게 된다.
+
+
+
+<img width="688" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/d76161f6-6098-4e78-a93f-a9a44aa283bf">
+
+* 세션2는 트랜잭션을 시작해 memberA의 money 상태를 1000으로 변경한다.
+
+
+
+<img width="686" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/ad3c3a89-2678-4278-bd19-2923103159be">
+
+* 세션2는 커밋을 수행하고 트랜잭션이 종료되었으므로 락을 함께 반납하며 끝나게 된다.
+
 
 
