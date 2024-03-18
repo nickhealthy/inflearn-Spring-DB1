@@ -1019,3 +1019,54 @@ class MemberRepositoryV1Test {
 
 
 
+## 트랜잭션 - DB 예제2 - 자동 커밋, 수동 커밋
+
+이번에는 자동 커밋과 수동 커밋에 대해 알아보자
+
+
+
+예제에 사용되는 스키마는 다음과 같다.
+
+```mysql
+ drop table member if exists;
+ create table member (
+     member_id varchar(10),
+     money integer not null default 0,
+     primary key (member_id)
+);
+```
+
+
+
+### 자동 커밋
+
+* 데이터베이스에 자동 커밋/수동 커밋이라는 개념이 존재하는데 <u>자동 커밋으로 설정하면 각각의 쿼리 실행 직후에 자동으로 커밋을 호출한다.</u>
+* 이는 편리한 기능이기도 하나 쿼리를 하나하나 실행할 때마다 자동으로 커밋되어 버리기 때문에 우리가 원하는 트랜잭션 기능을 제대로 사용할 수 없다.
+* **따라서 commit, rollback을 직접 호출하면서 트랜잭션 기능을 제대로 수행하려면 자동 커밋을 끄고 수동 커밋을 사용해야 한다.**
+* <u>참고로 수동 커밋 모드나 자동 커밋 모드는 한번 설정하면 해당 세션(커넥션)에서는 계속 유지된다.</u> 중간에 변경하는 것은 가능하다.
+
+
+
+#### 자동 커밋 설정
+
+```mysql
+set autocommit true; //자동 커밋 모드 설정
+insert into member(member_id, money) values ('data1',10000); //자동 커밋
+insert into member(member_id, money) values ('data2',10000); //자동 커밋
+```
+
+
+
+#### 수동 커밋 설정
+
+```mysql
+set autocommit false; //수동 커밋 모드 설정
+ insert into member(member_id, money) values ('data3',10000);
+ insert into member(member_id, money) values ('data4',10000);
+commit; //수동 커밋
+```
+
+
+
+
+
