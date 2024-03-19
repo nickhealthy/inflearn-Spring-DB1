@@ -1365,3 +1365,399 @@ class MemberServiceV1Test {
 
 이러한 문제를 해결하기 위해 트랜잭션의 ACID 원칙을 적용하는 것이 필요하다.
 
+
+
+## 트랜잭션 - 적용2
+
+앞서 발생한 문제를 해결하기 위해 트랜잭션을 적용해보자.
+**애플리케이션에서 트랜잭션은 비즈니스 로직이 있는 서비스 계층에서 시작해야한다.** 비즈니스 로직이 잘못되면 해당 비즈니스 로직으로 인해 문제가 되는 부분을 함께 롤백해야 하기 때문이다.
+
+이때 아래와 같은 몇가지 고려사항이 있다.
+
+* 트랜잭션을 하려면 결국 커넥션과 세션이 필요하다. <u>즉, 서비스 계층에서 커넥션을 만들고</u>, 트랜잭션 커밋 이후에 커넥션을 종료해야 한다.
+* **애플리케이션에서 DB 트랜잭션을 사용하려면 트랜잭션을 사용하는 동안 같은 커넥션을 유지해야 한다.** 그래야 같은 세션을 사용하며 트랜잭션을 유지할 수 있다.
+  * 하나의 세션이 하나의 트랜잭션을 관리하므로 하나의 작업을 트랜잭션으로 처리하려면 하나의 커넥션을 유지해야 한다는 뜻이다.
+
+<img width="705" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/4051958e-4da6-4564-b242-63123c6175d8">
+
+
+
+### 예제 - 트랜잭션 적용 | 같은 커넥션 유지를 위해 파라미터 사용
+
+트랜잭션을 사용하기 위해 같은 커넥션을 유지하려면 어떻게 해야할까?
+<u>가장 쉬운 방법은 커넥션을 파라미터로 전달해서 같은 커넥션이 사용되도록 유지하면 된다.</u>
+
+
+
+[MemberRepositoryV2] - 같은 커넥션 유지를 위해 파라미터 추가(`Connection con`), 커넥션 새로 생성 코드 삭제(`getConnection()`), 커넥션 유지를 위한 커넥션 종료(`close()`) 삭제
+
+* 앞서 테스트 코드에서 `findById(), update()` 메서드를 통해 계좌이체를 테스트하였다.
+* <u>따라서 위의 메서드에 같은 커넥션이 사용되도록 메서드 시그니처를 바꾼다.(Connection con) 추가</u>
+* 같은 커넥션을 사용해야 하므로 커넥션을 새로 생성하는 `getConnection()` 메서드는 사라져야한다. <u>즉, 서비스 계층에서 커넥션을 한번만 생성하고 계속 파라미터로 넘겨서 같은 커넥션을 유지해야 한다.</u> 
+* 또한 서비스 계층에서 비즈니스 로직을 처리하기 위해 다양한 메서드를 사용하여야 하고, <u>커넥션을 계속 유지하고 사용되어야 하므로 커넥션을 종료하는 코드를 데이터를 처리하는 Repository 레이어에서 종료하면 안된다.</u>
+  * 쉽게 말해, 서비스 계층에서 커넥션을 종료해야 하므로 Repository 레이어에서 커넥션을 종료하는 코드가 들어가선 안된다.
+
+```java
+package hello.jdbc.repository;
+
+import hello.jdbc.domain.Member;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.support.JdbcUtils;
+
+import javax.sql.DataSource;
+import java.sql.*;
+import java.util.NoSuchElementException;
+
+/**
+ * JDBC - ConnectionParam
+ */
+@Slf4j
+public class MemberRepositoryV2 {
+
+    private final DataSource dataSource;
+
+    // 외부에서 DataSource를 주입 받아서 사용한다. 이를 통해 구현체가 달라지더라도 코드를 변경할 일이 없다.
+    public MemberRepositoryV2(DataSource dataSource) {
+        this.dataSource = dataSource;
+    }
+
+    private Connection getConnection() throws SQLException {
+        Connection con = dataSource.getConnection();
+        log.info("get connection = {}, class = {}", con, con.getClass());
+        return con;
+    }
+
+    public Member save(Member member) throws SQLException {
+        String sql = "insert into member (member_id, money) values (?, ?)";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, member.getMemberId());
+            pstmt.setInt(2, member.getMoney());
+            pstmt.executeUpdate();
+            return member;
+
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        }
+    }
+
+    public Member findById(String memberId) throws SQLException {
+        String sql = "select * from member where member_id = ?";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+        ResultSet rs = null;
+
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, memberId);
+            rs = pstmt.executeQuery();
+
+            if (rs.next()) {
+                Member member = new Member();
+                member.setMemberId(rs.getString("member_id"));
+                member.setMoney(rs.getInt("money"));
+                return member;
+            } else {
+                throw new NoSuchElementException("member not found memberId = {}" + memberId);
+            }
+
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        } finally {
+            close(con, pstmt, rs);
+        }
+    }
+
+    public Member findById(Connection con, String memberId) throws SQLException {
+        String sql = "select * from member where member_id = ?";
+
+        PreparedStatement pstmt = null;
+        ResultSet rs = null;
+
+        try {
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, memberId);
+            rs = pstmt.executeQuery();
+
+            if (rs.next()) {
+                Member member = new Member();
+                member.setMemberId(rs.getString("member_id"));
+                member.setMoney(rs.getInt("money"));
+                return member;
+            } else {
+                throw new NoSuchElementException("member not found memberId = {}" + memberId);
+            }
+
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        } finally {
+            // connection은 여기서 닫지 않는다.
+            JdbcUtils.closeResultSet(rs);
+            JdbcUtils.closeStatement(pstmt);
+        }
+    }
+
+    public void update(String memberId, int money) throws SQLException {
+        String sql = "update member set money = ? where member_id = ?";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setInt(1, money);
+            pstmt.setString(2, memberId);
+            int resultSize = pstmt.executeUpdate();
+            log.info("resultSize = {}", resultSize);
+
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        } finally {
+            close(con, pstmt, null);
+
+        }
+    }
+
+    public void update(Connection con, String memberId, int money) throws SQLException {
+        String sql = "update member set money = ? where member_id = ?";
+
+        PreparedStatement pstmt = null;
+
+        try {
+            pstmt = con.prepareStatement(sql);
+            pstmt.setInt(1, money);
+            pstmt.setString(2, memberId);
+            int resultSize = pstmt.executeUpdate();
+            log.info("resultSize = {}", resultSize);
+
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        } finally {
+            // connection은 여기서 닫지 않는다.
+            JdbcUtils.closeStatement(pstmt);
+        }
+    }
+
+    public void delete(String memberId) throws SQLException {
+        String sql = "delete from member where member_id = ?";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, memberId);
+            pstmt.executeUpdate();
+
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        }
+    }
+
+    private void close(Connection con, Statement stmt, ResultSet rs) {
+        JdbcUtils.closeResultSet(rs);
+        JdbcUtils.closeStatement(stmt);
+        JdbcUtils.closeConnection(con);
+
+    }
+}
+```
+
+
+
+[MemberServiceV2] - 비즈니스 로직 & 트랜잭션 연동 로직을 작성
+
+* 같은 커넥션을 사용하기 위해 커넥션을 생성하고, 그 커넥션을 필요한 곳에 파라미터로 넘긴다.(`getConnection()`)
+* 트랜잭션을 시작하기 위해 자동커밋 모드를 비활성화 해야한다. (`con.setAutoCommit(false); // 트랜잭션 시작`)
+* 성공시 커밋(`con.commit()`)
+* 실패시 롤백(`con.rollback()`)
+* 수동 커밋 모드를 자동 커밋 모드로 변경 후 커넥션 종료: `release()`
+  * 커넥션 풀을 사용하게 되면 `con.close()`를 호풀하더라도 종료되는 것이 아닌 풀에 반납된다.
+
+```java
+package hello.jdbc.service;
+
+import hello.jdbc.domain.Member;
+import hello.jdbc.repository.MemberRepositoryV2;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.SQLException;
+
+/**
+ * 트랜잭션 - 파라미터 연동, 풀을 고려한 종료
+ */
+@Slf4j
+@RequiredArgsConstructor
+public class MemberServiceV2 {
+
+    private final DataSource dataSource;
+    private final MemberRepositoryV2 memberRepository;
+
+    // 계좌이체 메서드
+    public void accountTransfer(String fromId, String toId, int money) throws SQLException {
+
+        // 트랜잭션을 시작하려면 커넥션이 필요하다.
+        Connection con = dataSource.getConnection();
+        try {
+            con.setAutoCommit(false); // 트랜잭션 시작
+            // 비즈니스 로직
+            bizLogic(con, fromId, toId, money);
+            con.commit(); // 성공시 커밋
+        } catch (Exception e) {
+            con.rollback(); // 실패시 롤백
+            throw new IllegalStateException(e);
+        } finally {
+            // 커넥션 사용 이후 안전하게 종료
+            // 커넥션 풀을 사용하면 con.close를 호출해도 커넥션이 종료되는 것이 아니라 풀에 반납된다.
+            release(con);
+        }
+
+    }
+
+    private void release(Connection con) {
+        if (con != null) {
+            try {
+                con.setAutoCommit(true); // 커넥션 풀 고려
+                con.close();
+            } catch (Exception e) {
+                log.info("error", e);
+            }
+        }
+    }
+
+    private void bizLogic(Connection con, String fromId, String toId, int money) throws SQLException {
+        Member fromMember = memberRepository.findById(con, fromId);
+        Member toMember = memberRepository.findById(con, toId);
+
+        memberRepository.update(con, fromId, fromMember.getMoney() - money);
+        validation(toMember);
+        memberRepository.update(con, toId, toMember.getMoney() + money);
+    }
+
+
+    private void validation(Member toMember) {
+        if (toMember.getMemberId().equals("ex")) {
+            throw new IllegalStateException("이체중 예외 발생");
+        }
+    }
+}
+```
+
+
+
+[MemberServiceV2Test] - 계좌이체 테스트(정상 이체, 비정상 이체)
+
+* 정상 이체는 당연히 잘 수행된다.
+* 비정상 이체
+  * 중간에 로직을 수행하다 "ex" 유저가 들어와서 예외가 발생하게 되고, 아래 로직은 수행하지 않게 된다.
+  * 서비스 계층에서 트랜잭션이 정상적이지 않으면 롤백을 통해 데이터를 원복 시킨다.
+  * <u>트랜잭션 덕분에 모든 데이터를 정상적으로 초기화 할 수 있게 되었다. 결과적으로 계좌이체를 수행하기 직적으로 돌아가게 되었다.</u>
+
+```java
+package hello.jdbc.service;
+
+import hello.jdbc.domain.Member;
+import hello.jdbc.repository.MemberRepositoryV1;
+import hello.jdbc.repository.MemberRepositoryV2;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+
+import java.sql.SQLException;
+
+import static hello.jdbc.connection.ConnectionConst.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * 트랜잭션 - 커넥션 파라미터 전달 방식 동기화
+ */
+class MemberServiceV2Test {
+
+    public static final String MEMBER_A = "memberA";
+    public static final String MEMBER_B = "memberB";
+    public static final String MEMBER_EX = "ex";
+
+    private MemberRepositoryV2 memberRepository;
+    private MemberServiceV2 memberService;
+
+    @BeforeEach
+    void beforeEach() {
+        DriverManagerDataSource dataSource = new DriverManagerDataSource(URL, USERNAME, PASSWORD);
+        memberRepository = new MemberRepositoryV2(dataSource);
+        memberService = new MemberServiceV2(dataSource, memberRepository);
+    }
+
+    @AfterEach
+    void afterEach() throws SQLException {
+        memberRepository.delete(MEMBER_A);
+        memberRepository.delete(MEMBER_B);
+        memberRepository.delete(MEMBER_EX);
+    }
+
+    @Test
+    @DisplayName("정상 이체")
+    void accountTransfer() throws SQLException {
+        // given
+        Member memberA = new Member(MEMBER_A, 10000);
+        Member memberB = new Member(MEMBER_B, 10000);
+        memberRepository.save(memberA);
+        memberRepository.save(memberB);
+
+        // when
+        memberService.accountTransfer(memberA.getMemberId(), memberB.getMemberId(), 2000);
+
+        // then
+        Member findMemberA = memberRepository.findById(memberA.getMemberId());
+        Member findMemberB = memberRepository.findById(memberB.getMemberId());
+        assertThat(findMemberA.getMoney()).isEqualTo(8000);
+        assertThat(findMemberB.getMoney()).isEqualTo(12000);
+    }
+
+    @Test
+    @DisplayName("이체중 예외 발생")
+    void accountTransferEx() throws SQLException {
+        // given: 다음 데이터를 저장해서 테스트를 준비한다.
+        Member memberA = new Member(MEMBER_A, 10000);
+        Member memberEx = new Member(MEMBER_EX, 10000);
+        memberRepository.save(memberA);
+        memberRepository.save(memberEx);
+
+        // when: 계좌이체 로직을 실행한다.
+        // memberEx 회원의 ID는 ex 이므로 중간에 예외가 발생한다.
+        assertThatThrownBy(() ->
+                memberService.accountTransfer(memberA.getMemberId(), memberEx.getMemberId(), 2000))
+                .isInstanceOf(IllegalStateException.class);
+
+        // then: memberA의 돈이 롤백 되어야함
+        Member findMemberA = memberRepository.findById(memberA.getMemberId());
+        Member findMemberB = memberRepository.findById(memberEx.getMemberId());
+        assertThat(findMemberA.getMoney()).isEqualTo(10000);
+        assertThat(findMemberB.getMoney()).isEqualTo(10000);
+    }
+}
+```
+
+
+
