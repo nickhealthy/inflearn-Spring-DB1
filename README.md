@@ -1216,3 +1216,152 @@ commit;
 
 <img width="1357" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/366a863b-280c-4311-849d-09bb2162ade4">
 
+
+
+## 트랜잭션 - 적용1
+
+이제 애플리케이션에 트랜잭션을 적용해보자.
+우선 트랜잭션을 사용하기 전 앞서 트랜잭션 없이 단순하게 계좌이체 비즈니스 로직만 구현할 것이다.
+
+
+
+### 예제 - 트랜잭션 없이 단순 계좌이체 구현
+
+[MemberServiceV1] - 계좌이체 서비스 구현
+
+* fromId, toId 회원을 조회하여 fromID가 toId에게 계좌이체를 하는 시나리오이다.
+* <u>예외 상황을 테스트하기 위해 toId가 "ex"인 경우 예외를 발생한다.</u>
+
+```java
+package hello.jdbc.service;
+
+import hello.jdbc.domain.Member;
+import hello.jdbc.repository.MemberRepositoryV1;
+import lombok.RequiredArgsConstructor;
+
+import java.sql.SQLException;
+
+@RequiredArgsConstructor
+public class MemberServiceV1 {
+
+    private final MemberRepositoryV1 memberRepository;
+
+    // 계좌이체 메서드
+    public void accountTransfer(String fromId, String toId, int money) throws SQLException {
+        Member fromMember = memberRepository.findById(fromId);
+        Member toMember = memberRepository.findById(toId);
+
+        memberRepository.update(fromId, fromMember.getMoney() - money);
+        validation(toMember);
+        memberRepository.update(toId, toMember.getMoney() + money);
+    }
+
+    private void validation(Member toMember) {
+        if (toMember.getMemberId().equals("ex")) {
+            throw new IllegalStateException("이체중 예외 발생");
+        }
+    }
+}
+```
+
+
+
+[MemberServiceV1Test] - 계좌이체 테스트 진행
+
+* 정상 이체 테스트 - `accountTransfer()`
+  * 예외가 발생하지 않았기 때문에 정상적으로 memberA는 2000원 감소, memberB는 2000원이 증가하였다.
+* 비정상 이체 테스트 - `accountTransferEx()`
+  * memberA가 memberEx로 계좌이체를 하는 부분에서 ex 회원은 예외가 발생하게 했으므로 예외가 발생하고, 다음 구분인 memberEx의 계좌에 2000원이 추가되지 않게 된다.
+  * <u>하지만 memberA의 금액만 2000원 감소하였으므로 큰 문제가 발생하게 되었다.</u>
+
+```java
+package hello.jdbc.service;
+
+import hello.jdbc.connection.ConnectionConst;
+import hello.jdbc.domain.Member;
+import hello.jdbc.repository.MemberRepositoryV1;
+import org.assertj.core.api.Assertions;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+
+import java.sql.SQLException;
+
+import static hello.jdbc.connection.ConnectionConst.*;
+import static org.assertj.core.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+/**
+ * 기본 동작, 트랜잭션이 없어서 문제 발생
+ */
+class MemberServiceV1Test {
+
+    public static final String MEMBER_A = "memberA";
+    public static final String MEMBER_B = "memberB";
+    public static final String MEMBER_EX = "ex";
+
+    private MemberRepositoryV1 memberRepository;
+    private MemberServiceV1 memberService;
+
+    @BeforeEach
+    void beforeEach() {
+        DriverManagerDataSource dataSource = new DriverManagerDataSource(URL, USERNAME, PASSWORD);
+        memberRepository = new MemberRepositoryV1(dataSource);
+        memberService = new MemberServiceV1(memberRepository);
+    }
+
+    @AfterEach
+    void afterEach() throws SQLException {
+        memberRepository.delete(MEMBER_A);
+        memberRepository.delete(MEMBER_B);
+        memberRepository.delete(MEMBER_EX);
+    }
+
+    @Test
+    @DisplayName("정상 이체")
+    void accountTransfer() throws SQLException {
+        // given
+        Member memberA = new Member(MEMBER_A, 10000);
+        Member memberB = new Member(MEMBER_B, 10000);
+        memberRepository.save(memberA);
+        memberRepository.save(memberB);
+
+        // when
+        memberService.accountTransfer(memberA.getMemberId(), memberB.getMemberId(), 2000);
+
+        // then
+        Member findMemberA = memberRepository.findById(memberA.getMemberId());
+        Member findMemberB = memberRepository.findById(memberB.getMemberId());
+        assertThat(findMemberA.getMoney()).isEqualTo(8000);
+        assertThat(findMemberB.getMoney()).isEqualTo(12000);
+    }
+
+    @Test
+    @DisplayName("이체중 예외 발생")
+    void accountTransferEx() throws SQLException {
+        // given: 다음 데이터를 저장해서 테스트를 준비한다.
+        Member memberA = new Member(MEMBER_A, 10000);
+        Member memberEx = new Member(MEMBER_EX, 10000);
+        memberRepository.save(memberA);
+        memberRepository.save(memberEx);
+
+        // when: 계좌이체 로직을 실행한다.
+        assertThatThrownBy(() ->
+                memberService.accountTransfer(memberA.getMemberId(), memberEx.getMemberId(), 2000))
+                .isInstanceOf(IllegalStateException.class);
+
+        // then: 계좌이체는 실패한다. memberA의 돈만 2000원 줄어든다.
+        Member findMemberA = memberRepository.findById(memberA.getMemberId());
+        Member findMemberB = memberRepository.findById(memberEx.getMemberId());
+        assertThat(findMemberA.getMoney()).isEqualTo(8000);
+        assertThat(findMemberB.getMoney()).isEqualTo(10000);
+    }
+}
+```
+
+
+
+이러한 문제를 해결하기 위해 트랜잭션의 ACID 원칙을 적용하는 것이 필요하다.
+
