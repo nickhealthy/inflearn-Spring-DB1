@@ -11,6 +11,7 @@
 - 섹션 1 | JDBC 이해
 - 섹션 2 | 커넥션풀과 데이터소스 이해
 - 섹션 3 | 트랜잭션 이해
+- 섹션 4 | 스프링과 문제 해결 - 트랜잭션
 
 
 
@@ -1670,7 +1671,7 @@ public class MemberServiceV2 {
 * 비정상 이체
   * 중간에 로직을 수행하다 "ex" 유저가 들어와서 예외가 발생하게 되고, 아래 로직은 수행하지 않게 된다.
   * 서비스 계층에서 트랜잭션이 정상적이지 않으면 롤백을 통해 데이터를 원복 시킨다.
-  * <u>트랜잭션 덕분에 모든 데이터를 정상적으로 초기화 할 수 있게 되었다. 결과적으로 계좌이체를 수행하기 직적으로 돌아가게 되었다.</u>
+  * <u>트랜잭션 덕분에 모든 데이터를 정상적으로 초기화 할 수 있게 되었다. 결과적으로 계좌이체를 수행하기 직전으로 돌아가게 되었다.</u>
 
 ```java
 package hello.jdbc.service;
@@ -1758,6 +1759,125 @@ class MemberServiceV2Test {
     }
 }
 ```
+
+
+
+# 섹션 4 | 스프링과 문제 해결 - 트랜잭션
+
+## 문제점들
+
+### 애플리케이션의 구조
+
+<img width="749" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/feb74a08-91b4-4c84-885f-d7debfac5b19">
+
+#### 프레젠테이션 계층
+
+* UI와 관련된 처리 담당
+* 웹 요청과 응답
+* 사용자 요청을 검증
+* 주 사용 기술: 서블릿과 HTTP 같은 웹 기술, 스프링 MVC
+
+
+
+#### 서비스 계층
+
+* **비즈니스 로직을 담당**
+* 주 사용 기술: 가급적 특정 기술에 의존하지 않고, 순수 자바 코드로 작성
+
+
+
+#### 데이터 접근 계층
+
+* **실제 데이터베이스에 접근하는 코드**
+* 주 사용 기술: JDBC, JPA, File, Redis, Mongo...
+
+
+
+이중에서 가장 중요한 곳은 **비즈니스 핵심 로직이 들어있는 서비스 계층이다.**
+
+* 서비스 계층은 특정 기술에 종속적이지 않게 개발해야 한다.
+  * 이렇게 계층을 나눈 이유도 서비스 계층을 최대한 순수하게 유지하기 위한 목적이 가장 크다.
+  * 기술적인 부분은 프레젠테이션 계층, 데이터 접근 계층에서 가지고 간다.
+* <u>서비스 계층은 가급적 비즈니스 로직만 구현하고 특정 구현 기술에 직접 의존해서는 안된다.</u>
+  * 이렇게 구현하면 기술이 변경될 때 변경의 영향 범위를 최소화 할 수 있다.
+
+
+
+### 예시 - 트랜잭션을 적용한 코드
+
+[MemberServiceV2]
+
+* 트랜잭션은 비즈니스 로직이 있는 서비스 계층에서 시작하는 것이 좋다.
+* 문제는 트랜잭션을 사용하기 위해 다음과 같은 JDBC 기술에 의존하는 것이다.
+  * `javax.sql.DataSource;`
+  * `java.sql.Connection;`
+  * `java.sql.SQLException;`
+* 이렇게 JDBC 기술에 의존하면 JPA 같은 다른 기술로 바꾸어 사용하게 될 때 서비스 코드도 모두 변경해야한다.
+* 따라서 핵심 비즈니스 로직을 유지보수 하기 어려워진다.
+
+```java
+package hello.jdbc.service;
+ import javax.sql.DataSource;
+ import java.sql.Connection;
+ import java.sql.SQLException;
+ @Slf4j
+ @RequiredArgsConstructor
+ public class MemberServiceV2 {
+    private final DataSource dataSource;
+    private final MemberRepositoryV2 memberRepository;
+
+		public void accountTransfer(String fromId, String toId, int money) throws SQLException {
+        Connection con = dataSource.getConnection();
+        try {
+		        con.setAutoCommit(false); //트랜잭션 시작 //비즈니스 로직
+		        bizLogic(con, fromId, toId, money); con.commit(); //성공시 커밋
+        } catch (Exception e) {
+		        con.rollback(); //실패시 롤백
+		        throw new IllegalStateException(e);
+        } finally {
+    	      release(con);
+        } 
+    }
+    
+    private void bizLogic(Connection con, String fromId, String toId, int money)
+throws SQLException {
+        Member fromMember = memberRepository.findById(con, fromId);
+        Member toMember = memberRepository.findById(con, toId);
+        memberRepository.update(con, fromId, fromMember.getMoney() - money);
+        memberRepository.update(con, toId, toMember.getMoney() + money);
+    }
+}
+```
+
+
+
+### 문제점 정리
+
+#### 트랜잭션 문제
+
+가장 큰 문제는 트랜잭션을 적용하면서 생긴 다음과 같은 문제점들이 있다.
+
+* JDBC 구현 기술이 서비스 계층에 누수되는 문제
+  * 트랜잭션을 적용하기 위해 JDBC 구현 기술이 서비스 계층에 누수되었다.
+* 트랜잭션 동기화 문제
+  * 같은 트랜잭션을 유지하기 위해 커넥션을 파라미터로 넘기고 있다.
+* 트랜잭션 적용 반복 문제
+  * 트랜잭션 적용 코드를 보면 반복이 많다. `try, catch, finally` 등
+
+
+
+#### 예외 누수
+
+* 데이터 접근 계층의 JDBC 구현 기술 예외가 서비스 계층으로 전파된다.
+* `SQLException`은 체크 예외이기 때문에 데이터 접근 계층을 호출한 서비스 계층에서 해당 예외를 잡아서 처리하거나 명시적으로 `throws`를 통해 다시 밖으로 던져야 한다.
+
+
+
+#### JDBC 반복 문제
+
+* 커넥션을 열고 `PreparedStatement`를 사용하고, 결과를 매핑하는 하고 리소스를 정리 하는 과정들의 반복이다.
+
+
 
 
 
