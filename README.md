@@ -1879,5 +1879,62 @@ throws SQLException {
 
 
 
+## 트랜잭션 추상화
 
+현재 서비스 계층은 트랜잭션을 사용하기 위해 JDBC 기술에 의존하고 있다.
+구현 기술마다 트랜잭션을 사용하는 방법이 달라 서비스 계층을 유지보수 하기 힘든데, 이를 해결하기 위해 트랜잭션 추상화가 필요하다.
+
+
+
+### 기술 의존 시 발생하는 문제
+
+JDBC와 JPA가 사용하는 트랜잭션 코드는 다르다.
+따라서 기술 변경 시 서비스 계층의 코드도 JPA 기술을 사용하도록 함께 수정해야 한다.
+
+
+
+#### JDBC 트랜잭션 사용
+
+<img width="745" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/989f8c8f-4159-4dd0-b796-c29a7d8b084a">
+
+
+
+#### JDBC -> JPA 변경
+
+<img width="774" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/81474301-f439-4105-aba5-c2d7dba64437">
+
+
+
+### 스프링이 제공하는 트랜잭션 추상화
+
+위와 같은 문제를 해결하기 위해 <u>트랜잭션 기능을 인터페이스를 만들어 추상화를 하면 되지만</u>,
+스프링은 이미 트랜잭션 추상화 기술을 제공하고 있다.
+
+* 서비스 계층은 특정 기술에 의존하는 것이 아니라 원하는 구현체를 DI를 통해 주입하면 된다.
+* **클라이언트인 서비스 계층은 인터페이스에 의존하고, DI를 사용한 덕분에 OCP 원칙을 지킬 수 있다.**
+
+
+
+<img width="751" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/db70b43f-3bf3-4abe-bec5-eb2ea208bf2c">
+
+
+
+
+
+스프링 트랜잭션 추상화의 핵심은 `PlatformTransactionManager` 인터페이스다.
+
+* `getTransaction()`: 트랜잭션을 시작
+* `commit()`: 트랜잭션 커밋
+* `rollback()`: 트랜잭션 롤백
+
+```java
+package org.springframework.transaction;
+
+public interface PlatformTransactionManager extends TransactionManager {
+   TransactionStatus getTransaction(@Nullable TransactionDefinition definition)
+           throws TransactionException;
+   void commit(TransactionStatus status) throws TransactionException;
+   void rollback(TransactionStatus status) throws TransactionException;
+}
+```
 
