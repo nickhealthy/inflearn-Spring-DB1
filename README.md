@@ -1986,3 +1986,347 @@ public interface PlatformTransactionManager extends TransactionManager {
 
 
 
+## 트랜잭션 문제 해결 - 트랜잭션 매니저1
+
+트랜잭션 매니저를 애플리케이션 코드에 적용해보자
+
+* <u>트랜잭션 매니저를 사용하게 되면 특정 기술의 트랜잭션에 의존하지 않고, 추상화와 동기화를 지원해준다고 했다.</u>
+
+
+
+### 예시
+
+[MemberRepositoryV3] - <u>커넥션을 파라미터로 전달하는 부분이 모두 제거되었다.</u>
+
+* V2 버전에서는 `findById(), update()`에 파라미터로 커넥션을 넘겨줬었다.
+* `DataSourceUtils.getConnection()`
+  * **트랜잭션 동기화 매니저가 관리하는 커넥션이 있으면 해당 커넥션을 반환하고, 없는 경우 새로운 커넥션을 생성해서 반환한다.**
+* `DataSourceUtils.releaseConnection()`
+  * 해당 메서드를 사용하면 커넥션을 바로 닫는 것이 아니다.
+  * **트랜잭션을 사용하기 위해 동기화된 커넥션은 커넥션을 닫지 않고 그대로 유지해준다.**
+  * 트랜잭션 동기화 매니저가 관리하는 커넥션이 없는 경우 해당 커넥션을 닫는다.
+
+```java
+package hello.jdbc.repository;
+
+import hello.jdbc.domain.Member;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.datasource.DataSourceUtils;
+import org.springframework.jdbc.support.JdbcUtils;
+
+import javax.sql.DataSource;
+import java.sql.*;
+import java.util.NoSuchElementException;
+
+/**
+ * 트랜잭션 - 트랜잭션 매니저
+ * DataSourceUtils.getConnection()
+ * DataSourceUtils.releaseConnection()
+ * 트랜잭션 동기화 매니저를 사용하기 위해선 위의 메서드들을 사용해야 한다고 한다.
+ */
+@Slf4j
+public class MemberRepositoryV3 {
+
+    private final DataSource dataSource;
+
+    // 외부에서 DataSource를 주입 받아서 사용한다. 이를 통해 구현체가 달라지더라도 코드를 변경할 일이 없다.
+    public MemberRepositoryV3(DataSource dataSource) {
+        this.dataSource = dataSource;
+    }
+
+    private Connection getConnection() throws SQLException {
+        // 주의! 트랜잭션 동기화를 사용하려면 DataSoureUtils를 사용해야 한다.
+        // 트랜잭션 동기화 매니저가 관리하는 커넥션이 있으면 해당 커넥션을 반환한다.
+        // 트랜잭션 동기화 매니저가 관리하는 커넥션이 없는 경우 새로운 커넥션을 생성해서 반환한다.
+        Connection con = DataSourceUtils.getConnection(dataSource);
+        log.info("get connection = {}, class = {}", con, con.getClass());
+        return con;
+    }
+
+    private void close(Connection con, Statement stmt, ResultSet rs) {
+        JdbcUtils.closeResultSet(rs);
+        JdbcUtils.closeStatement(stmt);
+        // 주의! 트랜잭션 동기화를 사용하려면 DataSourceUtils를 사용해야 한다.
+        // 트랜잭션을 사용하기 위해 동기화된 커넥션은 커넥션을 닫지 않고, 그대로 유지해준다.(즉, 해당 메서드를 사용하더라도 커넥션을 바로 닫는 것이 아니다.)
+        // 트랜잭션 동기화 매니저가 관리하는 커넥션이 없는 경우 해당 커넥션을 닫는다.
+        DataSourceUtils.releaseConnection(con, dataSource);
+    }
+
+    public Member save(Member member) throws SQLException {
+        String sql = "insert into member (member_id, money) values (?, ?)";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, member.getMemberId());
+            pstmt.setInt(2, member.getMoney());
+            pstmt.executeUpdate();
+            return member;
+
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        }
+    }
+
+    public Member findById(String memberId) throws SQLException {
+        String sql = "select * from member where member_id = ?";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+        ResultSet rs = null;
+
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, memberId);
+            rs = pstmt.executeQuery();
+
+            if (rs.next()) {
+                Member member = new Member();
+                member.setMemberId(rs.getString("member_id"));
+                member.setMoney(rs.getInt("money"));
+                return member;
+            } else {
+                throw new NoSuchElementException("member not found memberId = {}" + memberId);
+            }
+
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        } finally {
+            close(con, pstmt, rs);
+        }
+    }
+
+    public void update(String memberId, int money) throws SQLException {
+        String sql = "update member set money = ? where member_id = ?";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setInt(1, money);
+            pstmt.setString(2, memberId);
+            int resultSize = pstmt.executeUpdate();
+            log.info("resultSize = {}", resultSize);
+
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        } finally {
+            close(con, pstmt, null);
+
+        }
+    }
+
+
+    public void delete(String memberId) throws SQLException {
+        String sql = "delete from member where member_id = ?";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, memberId);
+            pstmt.executeUpdate();
+
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        }
+    }
+}
+```
+
+
+
+
+
+[MemberServiceV3_1] - 트랜잭션 매니저를 사용하는 서비스 코드
+
+* `private final PlatformTransactionManager transactionManager;`
+  * 트랜잭션 매니저를 주입 받는다.
+  * 지금은 JDBC 기술을 사용하기 때문에 테스트 코드에서 `DataSourceTransactionManager` 구현체를 주입 받아야 한다.
+* `transactionManager.getTransaction()`
+  * 트랜잭션을 시작한다.
+  * `TransactionStatus`를 반환하게 되는데, 현재 트랜잭션의 상태 정보가 포함되어 있다. 이후 트랜잭션 커밋, 롤백할 때 필요하다.
+
+```java
+package hello.jdbc.service;
+
+import hello.jdbc.domain.Member;
+import hello.jdbc.repository.MemberRepositoryV3;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.DefaultTransactionDefinition;
+
+import java.sql.SQLException;
+
+/**
+ * 트랜잭션 - 트랜잭션 매니저
+ * 서비스 계층을 단순화하고 커네션을 추상화 및 동기화를 진행하기 위해 트랜잭션 매니저 사용(PlatformTransactionManager 객체를 사용)
+ */
+@Slf4j
+@RequiredArgsConstructor
+public class MemberServiceV3_1 {
+
+    private final PlatformTransactionManager transactionManager; // 트랜잭션 매니저(인터페이스)
+    private final MemberRepositoryV3 memberRepository;
+
+    // 계좌이체 메서드
+    public void accountTransfer(String fromId, String toId, int money) throws SQLException {
+
+        // 트랜잭션 시작, status는 현재 트랜잭션의 상태 정보가 포함되어 있다. 이후 트랜잭션을 커밋, 롤백할 때 필요하다.
+        // new DefaultTransactionDefinition - 트랜잭션과 관련된 옵션을 설정할 수 있다. 자세한 내용은 뒤에서 진행..
+        TransactionStatus status = transactionManager.getTransaction(new DefaultTransactionDefinition());
+        try {
+            // 비즈니스 로직
+            bizLogic(fromId, toId, money);
+            transactionManager.commit(status); // 성공시 커밋
+        } catch (Exception e) {
+            transactionManager.rollback(status); // 실패시 롤백
+            throw new IllegalStateException(e);
+        } // 트랜잭션 매니저를 사용하게 되면 트랜잭션이 종료된 것이므로 commit, rollback에 내부적으로 트랜잭션을 종료하는 로직이 들어가 있다.
+
+    }
+
+
+    private void bizLogic(String fromId, String toId, int money) throws SQLException {
+        Member fromMember = memberRepository.findById(fromId);
+        Member toMember = memberRepository.findById(toId);
+
+        memberRepository.update(fromId, fromMember.getMoney() - money);
+        validation(toMember);
+        memberRepository.update(toId, toMember.getMoney() + money);
+    }
+
+
+    private void validation(Member toMember) {
+        if (toMember.getMemberId().equals("ex")) {
+            throw new IllegalStateException("이체중 예외 발생");
+        }
+    }
+}
+```
+
+
+
+
+
+[MemberServiceV3_1Test] - 트랜잭션 매니저를 적용한 테스트
+
+* `new DataSourceTransactionManager(dataSource);`
+  * JDBC 기술을 사용하므로, JDBC용 트랜잭션 매니저를 구현체로 사용한다.
+  * 트랜잭션 매니저는 데이터소스를 통해 커넥션을 생성하므로 DataSource가 필요하다.
+
+```java
+package hello.jdbc.service;
+
+import hello.jdbc.domain.Member;
+import hello.jdbc.repository.MemberRepositoryV2;
+import hello.jdbc.repository.MemberRepositoryV3;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.PlatformTransactionManager;
+
+import java.sql.SQLException;
+
+import static hello.jdbc.connection.ConnectionConst.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * 트랜잭션 - 트랜잭션 매니저(PlatformTransactionManager)
+ * 결과적으로 서비스 계층을 단순화하고 하나의 기술에 종속되는 것을 막기 위해
+ * 트랜잭션 매니저인 PlatformTransactionManager(인터페이스)를 사용하여 추상화와 동기화까지 처리할 수 있게 되었다.
+ * - 기존에는 하나의 트랜잭션을 유지하기 위해 Connection을 파라미터로 받아서 처리를 진행하였지만, 불필요한 파라미터가 없어졌다.
+ * - 서비스 계층은 최대한 유지보수가 단순해야하며 코드가 변경되지 않도록 하는 것이 중요한데 트랜잭션 매니저를 사용함으로서 추상화을 이룰 수 있게 되었고, 서비스 계층이 DB 기술에 의존도를 낮추게 되었다.
+ */
+class MemberServiceV3_1Test {
+
+    public static final String MEMBER_A = "memberA";
+    public static final String MEMBER_B = "memberB";
+    public static final String MEMBER_EX = "ex";
+
+    private MemberRepositoryV3 memberRepository;
+    private MemberServiceV3_1 memberService;
+
+    @BeforeEach
+    void beforeEach() {
+        // 커넥션을 생성
+        DriverManagerDataSource dataSource = new DriverManagerDataSource(URL, USERNAME, PASSWORD);
+        // 서비스 계층을 단순화하고, 커넥션을 추상화 및 동기화를 진행하기 위해 트랜잭션 매니저 사용(PlatformTransactionManager 객체를 사용)
+        // 또한 트랜잭션 매니저는 데이터소스를 통해 커넥션을 생성하므로 DataSource 인자가 필요하다.
+        // new DataSourceTransactionManager - 지금은 JDBC 기술을 사용하기 때문에 트랜잭션 매니저(인터페이스)의 JBBC 구현체인 객체를 사용함
+        PlatformTransactionManager transactionManager = new DataSourceTransactionManager(dataSource);
+        memberRepository = new MemberRepositoryV3(dataSource);
+        memberService = new MemberServiceV3_1(transactionManager, memberRepository);
+    }
+
+    @AfterEach
+    void afterEach() throws SQLException {
+        memberRepository.delete(MEMBER_A);
+        memberRepository.delete(MEMBER_B);
+        memberRepository.delete(MEMBER_EX);
+    }
+
+    @Test
+    @DisplayName("정상 이체")
+    void accountTransfer() throws SQLException {
+        // given
+        Member memberA = new Member(MEMBER_A, 10000);
+        Member memberB = new Member(MEMBER_B, 10000);
+        memberRepository.save(memberA);
+        memberRepository.save(memberB);
+
+        // when
+        memberService.accountTransfer(memberA.getMemberId(), memberB.getMemberId(), 2000);
+
+        // then
+        Member findMemberA = memberRepository.findById(memberA.getMemberId());
+        Member findMemberB = memberRepository.findById(memberB.getMemberId());
+        assertThat(findMemberA.getMoney()).isEqualTo(8000);
+        assertThat(findMemberB.getMoney()).isEqualTo(12000);
+    }
+
+    @Test
+    @DisplayName("이체중 예외 발생")
+    void accountTransferEx() throws SQLException {
+        // given: 다음 데이터를 저장해서 테스트를 준비한다.
+        Member memberA = new Member(MEMBER_A, 10000);
+        Member memberEx = new Member(MEMBER_EX, 10000);
+        memberRepository.save(memberA);
+        memberRepository.save(memberEx);
+
+        // when: 계좌이체 로직을 실행한다.
+        // memberEx 회원의 ID는 ex 이므로 중간에 예외가 발생한다.
+        assertThatThrownBy(() ->
+                memberService.accountTransfer(memberA.getMemberId(), memberEx.getMemberId(), 2000))
+                .isInstanceOf(IllegalStateException.class);
+
+        // then: memberA의 돈이 롤백 되어야함
+        Member findMemberA = memberRepository.findById(memberA.getMemberId());
+        Member findMemberB = memberRepository.findById(memberEx.getMemberId());
+        assertThat(findMemberA.getMoney()).isEqualTo(10000);
+        assertThat(findMemberB.getMoney()).isEqualTo(10000);
+    }
+}
+```
+
+
+
