@@ -2385,3 +2385,229 @@ class MemberServiceV3_1Test {
   * 기술 변경 시 의존 관계 주입만 해당 기술의 구현체로 변경하면 된다.
 * 트랜잭션 동기화 매니저 덕분에 커넥션을 파라미터로 넘기지 않아도 트랜잭션을 유지할 수 있다.
 
+
+
+## 트랜잭션 문제 해결 - 트랜잭션 템플릿
+
+트랜잭션을 사용하는 로직을 살펴보면 다음과 같은 패턴이 반복된다.
+
+* 다른 서비스에서 트랜잭션을 시작하려면 `try, catch,  finally`를 포함한 성공 시 커밋, 실패 시 롤백 코드가 반복될 것이다.
+
+* <u>템플릿 콜백 패턴을 활용하면 이런 반복 문제를 해결할 수 있다.</u>
+
+```java
+// 트랜잭션 시작
+TransactionStatus status = transactionManager.getTransaction(new DefaultTransactionDefinition());
+        try {
+            // 비즈니스 로직
+            bizLogic(fromId, toId, money);
+            transactionManager.commit(status); // 성공시 커밋
+        } catch (Exception e) {
+            transactionManager.rollback(status); // 실패시 롤백
+            throw new IllegalStateException(e);
+        }
+    }
+}
+```
+
+
+
+### 스프링의 트랜잭션 템플릿
+
+템플릿 콜백 패턴을 적용하려면 템플릿을 제공하는 클래스를 작성해야 하는데, 스프링은 `TransactionTemplate`라는 템플릿 클래스를 제공한다.
+
+* `execute()` : 응답 값이 있을 때 사용한다.
+* `executeWithoutResult()` : 응답 값이 없을 때 사용한다.
+
+```java
+public class TransactionTemplate {
+     private PlatformTransactionManager transactionManager;
+     public <T> T execute(TransactionCallback<T> action){..}
+     void executeWithoutResult(Consumer<TransactionStatus> action){..}
+}
+```
+
+
+
+### 예제 - 트랜잭션 템플릿을 사용해서 반복되는 부분을 제거
+
+[MemberServiceV3_2]
+
+* 트랜잭션 템플릿을 사용하려면 트랜잭션 매니저가 필요하다. 
+  * 생성자에서 트랜잭션 매니저를 주입 받으면서 트랜잭션 템플릿을 생성한다.
+* <u>트랜잭션 템플릿 덕분에 트랜잭션을 시작하고, 커밋하거나 롤백하는 코드가 모두 제거되었다.</u>
+
+```java
+package hello.jdbc.service;
+
+import hello.jdbc.domain.Member;
+import hello.jdbc.repository.MemberRepositoryV3;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.DefaultTransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.sql.SQLException;
+
+/**
+ * 트랜잭션 - 트랜잭션 템플릿
+ * 트랜잭션 템플릿 덕분에 트랜잭션을 사용할 때 반복되는 코드를 제거할 수 있음(커밋, 롤백 등)
+ */
+@Slf4j
+public class MemberServiceV3_2 {
+
+    // TransactionTemplate을 사용하려면 transactionManager가 필요하다.
+    // 생성자에서 transactionManager를 주입 받으면서 TransactionTemplate을 생성했다.
+    private final TransactionTemplate txTemplate;
+    private final MemberRepositoryV3 memberRepository;
+
+    public MemberServiceV3_2(PlatformTransactionManager transactionManager, MemberRepositoryV3 memberRepository) {
+        this.txTemplate = new TransactionTemplate(transactionManager);
+        this.memberRepository = memberRepository;
+    }
+
+    /**
+     * 트랜잭션 템플릿 덕분에 트랜잭션을 시작하고, 커밋하거나 롤백하는 코드가 모두 제거됨
+     * 람다에서 체크 예외를 밖으로 던질 수 없기 때문에 언체크 예외로 바꾸어 예외를 던짐
+     */
+    public void accountTransfer(String fromId, String toId, int money) throws SQLException {
+        txTemplate.executeWithoutResult((status) -> {
+            try {
+                // 비즈니스 로직
+                bizLogic(fromId, toId, money);
+            } catch (SQLException e) {
+                throw new IllegalStateException(e); // 언체크 예외로 바꾸어 던짐
+            }
+        });
+
+    }
+
+    private void bizLogic(String fromId, String toId, int money) throws SQLException {
+        Member fromMember = memberRepository.findById(fromId);
+        Member toMember = memberRepository.findById(toId);
+
+        memberRepository.update(fromId, fromMember.getMoney() - money);
+        validation(toMember);
+        memberRepository.update(toId, toMember.getMoney() + money);
+    }
+
+
+    private void validation(Member toMember) {
+        if (toMember.getMemberId().equals("ex")) {
+            throw new IllegalStateException("이체중 예외 발생");
+        }
+    }
+}
+```
+
+
+
+[MemberServiceV3_2Test]
+
+* 테스트 코드는 트랜잭션 매니저를 적용했을 때(V3_1)과 같다.
+
+```java
+package hello.jdbc.service;
+
+import hello.jdbc.domain.Member;
+import hello.jdbc.repository.MemberRepositoryV3;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.PlatformTransactionManager;
+
+import java.sql.SQLException;
+
+import static hello.jdbc.connection.ConnectionConst.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * 트랜잭션 - 트랜잭션 템플릿
+ */
+class MemberServiceV3_2Test {
+
+    public static final String MEMBER_A = "memberA";
+    public static final String MEMBER_B = "memberB";
+    public static final String MEMBER_EX = "ex";
+
+    private MemberRepositoryV3 memberRepository;
+    private MemberServiceV3_2 memberService;
+
+    @BeforeEach
+    void beforeEach() {
+        // 커넥션을 생성
+        DriverManagerDataSource dataSource = new DriverManagerDataSource(URL, USERNAME, PASSWORD);
+        // 서비스 계층을 단순화하고, 커넥션을 추상화 및 동기화를 진행하기 위해 트랜잭션 매니저 사용(PlatformTransactionManager 객체를 사용)
+        // 또한 트랜잭션 매니저는 데이터소스를 통해 커넥션을 생성하므로 DataSource 인자가 필요하다.
+        // new DataSourceTransactionManager - 지금은 JDBC 기술을 사용하기 때문에 트랜잭션 매니저(인터페이스)의 JBBC 구현체인 객체를 사용함
+        PlatformTransactionManager transactionManager = new DataSourceTransactionManager(dataSource);
+        memberRepository = new MemberRepositoryV3(dataSource);
+        memberService = new MemberServiceV3_2(transactionManager, memberRepository);
+    }
+
+    @AfterEach
+    void afterEach() throws SQLException {
+        memberRepository.delete(MEMBER_A);
+        memberRepository.delete(MEMBER_B);
+        memberRepository.delete(MEMBER_EX);
+    }
+
+    @Test
+    @DisplayName("정상 이체")
+    void accountTransfer() throws SQLException {
+        // given
+        Member memberA = new Member(MEMBER_A, 10000);
+        Member memberB = new Member(MEMBER_B, 10000);
+        memberRepository.save(memberA);
+        memberRepository.save(memberB);
+
+        // when
+        memberService.accountTransfer(memberA.getMemberId(), memberB.getMemberId(), 2000);
+
+        // then
+        Member findMemberA = memberRepository.findById(memberA.getMemberId());
+        Member findMemberB = memberRepository.findById(memberB.getMemberId());
+        assertThat(findMemberA.getMoney()).isEqualTo(8000);
+        assertThat(findMemberB.getMoney()).isEqualTo(12000);
+    }
+
+    @Test
+    @DisplayName("이체중 예외 발생")
+    void accountTransferEx() throws SQLException {
+        // given: 다음 데이터를 저장해서 테스트를 준비한다.
+        Member memberA = new Member(MEMBER_A, 10000);
+        Member memberEx = new Member(MEMBER_EX, 10000);
+        memberRepository.save(memberA);
+        memberRepository.save(memberEx);
+
+        // when: 계좌이체 로직을 실행한다.
+        // memberEx 회원의 ID는 ex 이므로 중간에 예외가 발생한다.
+        assertThatThrownBy(() ->
+                memberService.accountTransfer(memberA.getMemberId(), memberEx.getMemberId(), 2000))
+                .isInstanceOf(IllegalStateException.class);
+
+        // then: memberA의 돈이 롤백 되어야함
+        Member findMemberA = memberRepository.findById(memberA.getMemberId());
+        Member findMemberB = memberRepository.findById(memberEx.getMemberId());
+        assertThat(findMemberA.getMoney()).isEqualTo(10000);
+        assertThat(findMemberB.getMoney()).isEqualTo(10000);
+    }
+}
+```
+
+
+
+### 정리
+
+* 트랜잭션 템플릿 덕분에 트랜잭션을 사용할 때 반복하는 코드를 제거할 수 있다.
+* 하지만 아직도 서비스 레이어인데 비즈니스 로직 뿐만 아니라 트랜잭션을 처리하는 기술 로직이 함께 포함되어 있다.
+  * 이 문제는 다음 스프링이 제공하는 트랜잭션 AOP를 통해 해결한다.
+
+
+
