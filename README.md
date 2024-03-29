@@ -3179,3 +3179,110 @@ class MemberServiceV3_4Test {
 
 
 
+## 체크 예외 기본 이해
+
+**체크 예외는 무조건 잡아서 처리하거나, 또는 밖으로 던지도록 선언해야 한다.** 그렇지 않으면 컴파일 오류가 발생한다.
+
+
+
+#### 예제
+
+[CheckedTest]
+
+```java
+package hello.jdbc.exception.basic;
+
+import lombok.extern.slf4j.Slf4j;
+import org.assertj.core.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.*;
+
+@Slf4j
+public class CheckedTest {
+
+    @Test
+    void checked_catch() {
+        Service service = new Service();
+        service.callCatch();
+    }
+
+    @Test
+    void checked_throw() {
+        Service service = new Service();
+        assertThatThrownBy(() -> service.callThrow())
+                .isInstanceOf(MyCheckedException.class);
+    }
+
+
+    /**
+     * Exception을 상속받은 예외는 체크 예외가 된다.
+     */
+    static class MyCheckedException extends Exception {
+        public MyCheckedException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Checked 예외는
+     * 예외를 잡아서 처리하거나, 던지거나 둘 중 하나를 필수로 선택해야 한다.
+     */
+    class Service {
+        Repository repository = new Repository();
+
+        /**
+         * 예외를 잡아서 처리하는 코드
+         */
+        public void callCatch() {
+            try {
+                repository.call();
+            } catch (MyCheckedException e) {
+                // 예외 처리 로직
+                log.info("예외 처리, message = {}", e.getMessage(), e);
+            }
+        }
+
+        /**
+         * 체크 예외를 밖으로 던지는 코드
+         * 체크 예외는 예외를 잡지 않고 밖으로 던지려면 throws 예외를 메서드에 필수로 선언해야 한다.
+         */
+        public void callThrow() throws MyCheckedException {
+            repository.call();
+        }
+    }
+
+    static class Repository {
+        public void call() throws MyCheckedException {
+            throw new MyCheckedException("ex");
+        }
+    }
+
+}
+```
+
+
+
+#### 예제 실행 결과
+
+* `checked_catch()`는 예외를 잡았기 때문에 테스트 메서드까지 예외가 올라오지 않는다.
+* `checked_throw()`는 예외를 처리하지 않고 밖으로 던지기 때문에 예외가 테스트 메서드까지 올라온다.
+
+
+
+#### 체크 예외 vs 언체크 예외
+
+* Exception을 상속받으면 체크 예외가 된다
+* RuntimeException을 상속받으면 언체크 예외가 된다.
+* `catch, throws` 모두 예외를 설정한 해당 타입과 그 하위 타입을 모두 잡거나 던질 수 있다.
+
+
+
+#### 체크 예외의 장단점
+
+체크 예외는 예외를 잡아서 처리할 수 없을 때, 예외를 밖으로 던지는 `throws`를 필수로 선언해야 한다.
+그렇지 않으면 컴파일 오류가 발생한다.
+
+* 장점: 개발자가 실수로 예외를 누락하지 않도록 컴파일러를 통해 문제를 잡아줄 수 있다.
+* 단점: 개발자가 모든 체크 예외를 반드시 잡거나 던지도록 처리해야 하기 때문에, 너무 번거로운 일이 된다.
+  * 추가로 의존 관계에 따른 단점도 있다.
