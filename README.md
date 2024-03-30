@@ -3401,3 +3401,123 @@ public class UncheckedTest {
 
 
 
+## 체크 예외 활용
+
+언제 체크 예외를 사용하고, 언제 언체크(런타임) 예외를 사용하면 좋을까?
+
+
+
+#### 다음 2가지의 원칙을 기억하자
+
+1. **기본적으로 언체크 예외를 사용하자**
+2. 체크 예외는 비즈니스 로직상 의도적으로 던지는 예외에만 사용하자
+   * 예외를 잡아서 반드시 처리해야 하는 문제일 경우 체크 예외를 사용해야 한다.
+   * 계좌 이체처럼 비즈니스 로직 상 중요한 로직에서는 체크 예외를 통해 개발자가 놓친 예외를 인지할 수 있다.
+
+
+
+#### 체크 예외의 문제점
+
+체크 예외는 컴파일러가 예외 누락을 체크해주기 때문에 개발자가 실수로 예외를 놓치는 것을 막아주어 좋을 것 같지만 다음과 같은 문제점들이 있다.
+
+예제 코드를 통해 알아보자
+
+
+
+[CheckedAppTest]
+
+```java
+package hello.jdbc.exception.basic;
+
+import lombok.extern.slf4j.Slf4j;
+import org.assertj.core.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import java.net.ConnectException;
+import java.sql.SQLException;
+
+import static org.assertj.core.api.Assertions.*;
+
+@Slf4j
+public class CheckedAppTest {
+
+    @Test
+    void checked() {
+        Controller controller = new Controller();
+        assertThatThrownBy(() -> controller.request())
+                .isInstanceOf(Exception.class);
+    }
+
+    static class Controller {
+        Service service = new Service();
+
+        public void request() throws SQLException, ConnectException {
+            service.logic();
+        }
+
+
+    }
+
+    static class Service {
+        Repository repository = new Repository();
+        NetworkClient networkClient = new NetworkClient();
+
+        public void logic() throws SQLException, ConnectException {
+            repository.call();
+            networkClient.call();
+        }
+    }
+
+    static class Repository {
+        public void call() throws SQLException {
+            throw new SQLException("ex");
+        }
+    }
+
+
+    static class NetworkClient {
+        public void call() throws ConnectException {
+            throw new ConnectException("연결 실패");
+        }
+    }
+
+
+}
+```
+
+
+
+#### 2가지 문제점
+
+다음 코드를 통해 2가지 문제점이 있는 것을 알 수 있다.
+
+* 복구 불가능한 예외
+* 의존 관계에 대한 문제
+
+
+
+#### 1. 복구 불가능한 예외
+
+대부분의 예외는 복구가 불가능하다. 이런 문제들은 서비스나 컨트롤러 단에서 처리할 수 없다.
+이런 문제들은 일관성 있게 공통으로 처리해야 한다. 오류 로그를 남기고 개발자가 해당 오류를 빠르게 인지하는 것이 필요하다.
+서블릿 필터, 스프링 인터셉터, 스프링의 `ControllerAdvice`를 사용하면 이런 부분을 깔끔하게 공통으로 처리할 수 있다.
+
+
+
+#### 2. 의존 관계에 대한 문제
+
+체크 예외의 또 다른 문제는 예외에 대한 의존 관계 문제이다.
+체크 예외이기 때문에 예외가 메서드 시그니처에 존재하면 컨트롤러나 서비스 입장에서는 본인이 처리할 수 없어도 `throws` 를 통해 던지는 예외를 선언해야 한다. `throws SQLException, ConnectException`처럼 예외를 던지는 부분이 문제가 되는 이유는 서비스, 컨트롤러 단에서 `java.sql.SQLException`과 같은 **특정 기술에 의존하기 때문에 문제가 된다.**
+
+서비스나 컨트롤러 입장에서는 어차피 본인이 처리할 수도 없는 예외를 의존해야 하는 큰 단점이 발생하게 된다.
+**결과적으로 OCP, DI를 통해 클라이언트의 코드의 변경 없이 대상 구현체를 변경할 수 있다는 장점이 체크 예외 때문에 발목을 잡게 된다.**
+
+![image](https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/99da4154-7b86-4f40-b59c-757ec8f7fa21)
+
+#### 정리 
+
+* 처리할 수 있는 체크 예외라면 서비스나 컨트롤러에서 처리하겠지만, 지금처럼 데이터베이스나 네트워크 통신처럼 시스템 레벨에서 올라온 예외들은 대부분 복구가 불가능하다.
+* 이런 예외들에서 체크 예외를 사용하게 되면 올라온 복구 불가능한 예외를 서비스, 컨트롤러 같은 각각의 클래스가 모두 알고 있어야 하고, 불필요한 의존 관계의 문제를 갖게 된다.
+
+
+
