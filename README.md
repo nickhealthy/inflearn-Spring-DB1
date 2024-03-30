@@ -3500,7 +3500,7 @@ public class CheckedAppTest {
 
 대부분의 예외는 복구가 불가능하다. 이런 문제들은 서비스나 컨트롤러 단에서 처리할 수 없다.
 이런 문제들은 일관성 있게 공통으로 처리해야 한다. 오류 로그를 남기고 개발자가 해당 오류를 빠르게 인지하는 것이 필요하다.
-서블릿 필터, 스프링 인터셉터, 스프링의 `ControllerAdvice`를 사용하면 이런 부분을 깔끔하게 공통으로 처리할 수 있다.
+**서블릿 필터, 스프링 인터셉터, 스프링의 `ControllerAdvice`를 사용하면 이런 부분을 깔끔하게 공통으로 처리할 수 있다.**
 
 
 
@@ -3518,6 +3518,142 @@ public class CheckedAppTest {
 
 * 처리할 수 있는 체크 예외라면 서비스나 컨트롤러에서 처리하겠지만, 지금처럼 데이터베이스나 네트워크 통신처럼 시스템 레벨에서 올라온 예외들은 대부분 복구가 불가능하다.
 * 이런 예외들에서 체크 예외를 사용하게 되면 올라온 복구 불가능한 예외를 서비스, 컨트롤러 같은 각각의 클래스가 모두 알고 있어야 하고, 불필요한 의존 관계의 문제를 갖게 된다.
+
+
+
+## 언체크 예외 활용
+
+이번에는 언체크 예외를 활용해보자
+
+* `SQLException`을 런타임 예외인 `RuntimeSQLException`으로 변환한다.
+* `ConnectionException`대신 `RuntimeConnectionExcetpion`을 사용하도록 바꾼다.
+* **런타임 예외이기 때문에 서비스, 컨트롤러는 해당 예외들을 처리할 수 없다면 별도의 선언 없이 그냥 두면 된다.**
+
+![image](https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/bd30b781-cbc0-4a14-9608-a68bdcdb98fd)
+
+
+
+#### 예제 - 런타임 예외 사용 변환
+
+[UncheckedAppTest]
+
+* 런타임 예외이기 때문에 체크 예외처럼 컨트롤러나 서비스가 예외에 의존할 필요 없이 생략할 수 있다. 
+  * 즉, 의존 관계가 발생하지 않는다.
+
+```java
+package hello.jdbc.exception.basic;
+
+import lombok.extern.slf4j.Slf4j;
+import org.junit.jupiter.api.Test;
+
+import java.sql.SQLException;
+
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+@Slf4j
+public class UncheckedAppTest {
+
+    @Test
+    void checked() {
+        Controller controller = new Controller();
+        assertThatThrownBy(() -> controller.request())
+                .isInstanceOf(Exception.class);
+    }
+
+    @Test
+    void printEx() {
+        Controller controller = new Controller();
+        try {
+            controller.request();
+        } catch (Exception e) {
+            // e.printStackTrace();
+            log.info("ex", e);
+        }
+    }
+
+    static class Controller {
+        Service service = new Service();
+
+        public void request() {
+            service.logic();
+        }
+    }
+
+    static class Service {
+        Repository repository = new Repository();
+        NetworkClient networkClient = new NetworkClient();
+
+        public void logic() {
+            repository.call();
+            networkClient.call();
+        }
+    }
+
+    static class Repository {
+        public void call() {
+            try {
+                runSQL();
+            } catch (SQLException e) {
+                throw new RuntimeSQLException(e);
+            }
+        }
+
+        private void runSQL() throws SQLException {
+            throw new SQLException("ex");
+        }
+    }
+
+
+    static class NetworkClient {
+        public void call() {
+            throw new RuntimeConnectionException("연결 실패");
+        }
+    }
+
+    static class RuntimeConnectionException extends RuntimeException {
+        public RuntimeConnectionException(String message) {
+            super(message);
+        }
+    }
+
+    static class RuntimeSQLException extends RuntimeException {
+        public RuntimeSQLException() {
+        }
+
+        public RuntimeSQLException(Throwable cause) {
+            super(cause);
+        }
+    }
+
+
+}
+```
+
+
+
+#### 예외 전환
+
+* 리포지토리에서 체크 예외인 `SQLException`이 발생하면 런타임 예외인 `RuntimeSQLException`으로 전환해서 예외를 던진다.
+  * **참고로 이때 기존 예외를 포함해주어야 예외 출력시 스택 트레이서에서 기존 예외도 함께 확인할 수 있다.**
+
+* `NetworkClinet`는 단순히 기존 체크 예외를 `RuntimeConnectionException`이라는 런타임 예외가 발생하도록 코드를 변경하였다.
+
+
+
+#### 런타임 예외 전환 시 효과
+
+* 대부분 복구 불가능한 예외: 시스템에서 발생한 예외는 대부분 복구 불가능한 예외인데, **런타임 예외를 사용하면 서비스나 컨트롤러가 이런 복구 불간으한 예외를 신경쓰지 않아도 된다. 물론 이렇게 복구 불가능한 예외는 일관성 있게 공통으로 처리해야 한다.**
+* 의존 관계에 대한 문제: 런타임 예외는 해당 객체가 처리할 수 없는 예외는 무시하면 된다. 따라서 체크 예외처럼 **예외를 강제로 의존하지 않아도 된다.**
+
+
+
+#### 정리
+
+* 런타임 예외를 사용하면 중간에 기술이 변경되어도 해당 예외를 사용하지 않는 컨트롤러, 서비스에서는 코드를 변경하지 않아도 된다.
+* <u>구현 기술이 변경되는 경우, 예외를 공통으로 처리하는 곳에서는 예외에 따른 다른 처리가 필요할 수 있다. 하지만 공통 처리하는 곳만 변경하면 되기 때문에 변경 영향 범위는 최소화 된다.</u>
+* 추가로 런타임 예외는 놓칠 수 있기 때문에 문서화가 중요하다.
+
+![image](https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/68371f43-c5df-4c8b-bd9b-b6915a7111c4)
 
 
 
