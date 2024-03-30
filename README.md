@@ -3657,3 +3657,55 @@ public class UncheckedAppTest {
 
 
 
+## 예외 포함과 스택 트레이스
+
+**예외를 전환할 때는 꼭 기존 예외를 포함해야 한다.**
+그렇지 않으면 스택 트레이스를 확인할 때 심각한 문제가 발생한다.
+
+* 로그를 출력할 때 마지막 파라미터에 예외를 넣어주면 로그에 스택 트레이스를 출력할 수 있다.
+* `System.out`에 스택 트레이스에 출력하려면 `e.printStackTrace()`를 사용한다.
+  * <u>실무에서는 항상 로그를 사용한다고 한다.</u>
+
+```java
+@Test
+void printEx() {
+    Controller controller = new Controller();
+    try {
+        controller.request();
+    } catch (Exception e) {
+        // e.printStackTrace();
+        log.info("ex", e);
+    }
+}
+```
+
+
+
+#### 실행 결과 - 기존 예외를 포함하는 경우
+
+예외를 포함해서 기존에 발생한 `java.sql.SQLException`과 스택 트레이스를 확인할 수 있다.
+
+```cmd
+23:55:55.579 [Test worker] INFO  h.j.exception.basic.UncheckedAppTest --
+                ex
+hello.jdbc.exception.basic.UncheckedAppTest$RuntimeSQLException: java.sql.SQLException: ex
+	at hello.jdbc.exception.basic.UncheckedAppTest$Repository.call(UncheckedAppTest.java:54)
+	at hello.jdbc.exception.basic.UncheckedAppTest$Service.logic(UncheckedAppTest.java:44)
+	at hello.jdbc.exception.basic.UncheckedAppTest$Controller.request(UncheckedAppTest.java:35)
+```
+
+
+
+#### 실행 결과 - 기존 예외를 포함하지 않는 경우
+
+예외를 포함하지 않아서 기존에 발생한 `java.sql.SQLException`과 스택 트레이스를 확인할 수 없다.
+
+```cmd
+23:57:09.896 [Test worker] INFO  h.j.exception.basic.UncheckedAppTest --
+                ex
+hello.jdbc.exception.basic.UncheckedAppTest$RuntimeSQLException: null
+	at hello.jdbc.exception.basic.UncheckedAppTest$Repository.call(UncheckedAppTest.java:54)
+	at hello.jdbc.exception.basic.UncheckedAppTest$Service.logic(UncheckedAppTest.java:44)
+	at hello.jdbc.exception.basic.UncheckedAppTest$Controller.request(UncheckedAppTest.java:35)
+```
+
