@@ -13,6 +13,7 @@
 - 섹션 3 | 트랜잭션 이해
 - 섹션 4 | 스프링과 문제 해결 - 트랜잭션
 - 섹션 5 | 자바 예외 이해
+- 섹션 6 | 스프링과 문제 해결 - 예외 처리, 반복
 
 
 
@@ -3708,4 +3709,54 @@ hello.jdbc.exception.basic.UncheckedAppTest$RuntimeSQLException: null
 	at hello.jdbc.exception.basic.UncheckedAppTest$Service.logic(UncheckedAppTest.java:44)
 	at hello.jdbc.exception.basic.UncheckedAppTest$Controller.request(UncheckedAppTest.java:35)
 ```
+
+
+
+# 섹션 6 | 스프링과 문제 해결 - 예외 처리, 반복
+
+## 체크 예외와 인터페이스
+
+앞서 살펴본 바와 같이 **서비스 계층은 가급적 특정 구현 기술에 의존하지 않고, 순수하게 유지하는 것이 좋다.**
+이렇게 하려면 예외에 대한 의존도 함께 해결해야 한다. 예외 의존을 해결하기 위해 체크 예외를 런타임 예외로 변경해야 한다.
+
+
+
+#### 인터페이스 도입
+
+인터페이스 도입을 통해 구현 기술을 쉽게 변경할 수 있게 변경한다.
+
+* 이렇게 인터페이스를 도입하면 `MemberSerive`는 `MemberRepository` 인터페이스에만 의존하면 된다.
+* **구현 기술을 변경하고 싶으면 DI를 사용해서 `MemberSerivce` 코드의 변경 없이 구현 기술을 변경할 수 있다.**
+
+<img width="717" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/5c7ea06b-35db-485b-895f-e66e9d462b55">
+
+
+
+#### 코드
+
+[MemberRepository]
+
+* 기존에는 체크 예외이기 때문에 인터페이스를 도입할 수 없었다.
+* 체크 예외인 경우 무조건 예외를 잡아서 처리하거나 던져야 하기 때문에 체크 예외도 인터페이스에 선언되어야 한다.
+  * 따라서 차후 체크 예외를 런타임 예외로 변경할 예정이다.
+* <u>참고로 구현 클래스의 메서드에 선언할 수 있는 예외는 부모 타입에서 던진 예외와 같거나 하위 타입이어야 한다.</u>
+
+```java
+package hello.jdbc.repository;
+
+import hello.jdbc.domain.Member;
+
+public interface MemberRepository {
+
+    Member save(Member save);
+
+    Member findById(String memberId);
+
+    void update(String memberId, int money);
+
+    void delete(String memberId);
+}
+```
+
+
 
