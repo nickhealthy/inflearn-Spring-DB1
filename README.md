@@ -4152,3 +4152,219 @@ class MemberServiceV4Test {
 
 
 
+## 데이터 접근 예외 직접 만들기
+
+**데이터베이스에서 특정 예외의 경우 복구를 시도할 수도 있다.**
+앞서 만든 예외는 런타임 예외로 처리하여 예외 의존성 문제를 해결하였지만, 예외를 구분할 수 없다는 단점이 있다.
+<u>따라서 이번에는 회원가입 시 같은 아이디가 있으면 뒤에 임의의 숫자를 붙여서 가입이 가능하도록 특정 예외를 만들어보려고 한다.</u>
+
+* 데이터베이스는 에러가 발생할 때 오류 코드를 반환하고, 이 에러 코드를 받은 JDBC 드라이버는 `SQLExcetpion`을 던지며, 이 안에는 데이터베이스가 제공하는 `errorCode`라는 것이 들어있다.
+* 아래는 데이터베이스의 오류가 발생했을 때 시나리오다.
+
+<img width="705" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/0fda46f3-af84-4b76-be17-778b3c2f3de1">
+
+<u>서비스 계층에서는 예외 복구를 위해 키 중복 오류를 확인할 수 있어야 한다.</u> 그래야 새로운 ID를 만들어서 다시 저장을 시도할 수 있기 떄문이다. 이런 과정이 바로 예외를 확인해서 복구하는 과정이다.
+
+<u>H2 데이터베이스의 키 중복 오류는 23505인데 이 에러가 발생했을 때 새로운 ID를 만들어서 다시 저장하면 된다.</u>
+
+
+
+#### 예제
+
+[MyDuplicateKeyException]
+
+SQLException은 체크 예외이기 때문에 런타임 예외로 바꿔줄 필요가 있다.
+
+* 기존에 사용했던 `MyDbException`을 상속받아 의미있는 계층을 형성한다. 이렇게하면 데이터베이스 관련 예외라는 계층을 만들 수 있다.
+
+```java
+package hello.jdbc.repository.ex;
+
+public class MyDuplicateKeyException extends MyDbException {
+
+    public MyDuplicateKeyException() {
+    }
+
+    public MyDuplicateKeyException(String message) {
+        super(message);
+    }
+
+    public MyDuplicateKeyException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
+    public MyDuplicateKeyException(Throwable cause) {
+        super(cause);
+    }
+}
+```
+
+
+
+
+
+[ExTranslatorV1Test] - 아이디 중복 가입 시 예외 복구 테스트 코드
+
+이제 실제 예제 코드를 만들어서 확인해보자
+
+```java
+package hello.jdbc.exception.translator;
+
+import hello.jdbc.connection.ConnectionConst;
+import hello.jdbc.domain.Member;
+import hello.jdbc.repository.ex.MyDbException;
+import hello.jdbc.repository.ex.MyDuplicateKeyException;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.support.JdbcUtils;
+import org.springframework.stereotype.Repository;
+
+import javax.sql.DataSource;
+import javax.xml.crypto.Data;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.util.Random;
+
+import static hello.jdbc.connection.ConnectionConst.*;
+import static org.springframework.jdbc.support.JdbcUtils.*;
+
+public class ExTranslatorV1Test {
+
+    Repository repository;
+    Service service;
+
+    @BeforeEach
+    void init() {
+        DriverManagerDataSource dataSource = new DriverManagerDataSource(URL, USERNAME, PASSWORD);
+        repository = new Repository(dataSource);
+        service = new Service(repository);
+    }
+
+    @Test
+    void duplicateKeySave() {
+        service.create("myId");
+        service.create("myId"); // 같은 ID 저장 시도
+    }
+
+    @Slf4j
+    @RequiredArgsConstructor
+    static class Service {
+
+        private final Repository repository;
+
+        public void create(String memberId) {
+            try {
+                repository.save(new Member(memberId, 0));
+                log.info("saveId = {}", memberId);
+            } catch (MyDuplicateKeyException e) {
+                log.info("키 중복, 복구 시도");
+                String retryId = generateNewId(memberId);
+                log.info("retryId = {}", retryId);
+                repository.save(new Member(retryId, 0));
+            } catch (MyDbException e) {
+                log.info("데이터 접근 계층 예외", e);
+                throw e;
+            }
+        }
+
+        private String generateNewId(String memberId) {
+            return memberId + new Random().nextInt(10000);
+        }
+    }
+
+    @RequiredArgsConstructor
+    static class Repository {
+
+        private final DataSource dataSource;
+
+        public Member save(Member member) {
+            String sql = "insert into member(member_id, money) values(?, ?)";
+
+            Connection con = null;
+            PreparedStatement pstmt = null;
+
+            try {
+                con = dataSource.getConnection();
+                pstmt = con.prepareStatement(sql);
+                pstmt.setString(1, member.getMemberId());
+                pstmt.setInt(2, member.getMoney());
+                pstmt.executeUpdate();
+                return member;
+            } catch (SQLException e) {
+                // h2 db
+                if (e.getErrorCode() == 23505) {
+                    throw new MyDuplicateKeyException(e);
+                }
+
+                throw new MyDbException(e);
+            } finally {
+                closeStatement(pstmt);
+                closeConnection(con);
+            }
+        }
+    }
+}
+```
+
+
+
+#### 실행 결과
+
+같은 아이디를 저장했지만 서비스 계층에서 예외를 잡고 복구했다.
+
+```cmd
+13:03:33.882 [Test worker] INFO  h.j.e.t.ExTranslatorV1Test$Service --
+                saveId = myId
+13:03:33.890 [Test worker] INFO  h.j.e.t.ExTranslatorV1Test$Service --
+                키 중복, 복구 시도
+13:03:33.891 [Test worker] INFO  h.j.e.t.ExTranslatorV1Test$Service --
+                retryId = myId1480
+```
+
+
+
+##### 리포지토리
+
+* **`e.getErrorCode() == 23505`: 오류 코드가 키 중복 오류인 경우 우리가 정의한 `MyDuplicateKeyException`을 새로 만들어서 서비스 계층에 던진다.**
+* 나머지 경우 기존에 만들었던 `MyDbException`을 던진다.
+
+```java
+} catch (SQLException e) {
+// h2 db
+if (e.getErrorCode() == 23505) {
+  throw new MyDuplicateKeyException(e);
+}
+
+throw new MyDbException(e);
+```
+
+
+
+##### 서비스
+
+* 처음엔 저장을 시도하고, 리포지토리에서 `MyDuplicateKeyException` 예외가 올라오면 예외를 잡아서 복구를 시도하고 다시 저장을 시도한다.
+* 만약 복구가 불가능한 에러라면(`MyDbException`) 로그만 남기고 예외를 던진다.
+  * <u>만약 어차피 복구할 수 없는 예외라면 예외를 공통으로 처리하는 부분까지 전달되어서 그 곳에서 예외 로그를 남기고 처리하는 것이 좋다.</u>
+
+```java
+try {
+  	repository.save(new Member(memberId, 0));
+  	log.info("saveId = {}", memberId);
+} catch (MyDuplicateKeyException e) {
+  	log.info("키 중복, 복구 시도");
+  	String retryId = generateNewId(memberId);
+  	log.info("retryId = {}", retryId);
+  	repository.save(new Member(retryId, 0));
+} catch (MyDbException e) {
+  	log.info("데이터 접근 계층 예외", e);
+  	throw e;
+}
+```
+
+
+
