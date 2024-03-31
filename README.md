@@ -4368,3 +4368,152 @@ try {
 
 
 
+## 스프링 예외 추상화 이해
+
+위와 같은 방식으로 특정 예외에 대한 처리를 할 수 있었지만, 데이터베이스마다 에러 코드도 다르고 무수히 많은 예외 상황을 모두 작성하기는 효율적이지 않다. 데이터베이스가 바뀐다면 모두 수정해야 할 것이다.
+
+이를 해결하기 위해 **스프링에서는 데이터 접근과 관련된 예외를 추상화해서 제공한다.**
+
+
+
+#### 스프링 데이터 접근 예외 계층
+
+* 스프링은 데이터 접근 계층에 대한 수십 가지 예외를 정리해서 일관된 예외 계층을 제공한다.
+* **각각의 예외는 특정 기술에 종속적이지 않게 설계되어 있다. 따라서 서비스 계층에서도 스프링이 제공하는 예외를 사용하면 된다.**
+* 예외의 최고 상위는 `DataAccessException`인데, 런타임 예외를 상속 받았기 떄문에 스프링이 제공하는 데이터 접근 계층의 모든 예외는 런타임 예외이다.
+* `DataAccessException`은 크게 두 가지로 구분한다.
+  * `Transient`: 일시적이라는 뜻이다. `Trasient` 하위 예외는 동일한 SQL을 다시 시도했을 때 성공할 가능성이 있다.
+    * 예를 들어 쿼리 타임아웃, 락과 관련된 오류들이다.
+  * `NonTransient`: 일시적이지 않다는 뜻이다. 같은 SQL을 그대로 반복해서 실행하면 실패한다.
+    * SQL 문법 오류, 데이터베이스 제약조건 위배 등이 있다.
+
+<img width="742" alt="image" src="https://github.com/nickhealthy/inflearn-Spring-DB1-1/assets/66216102/e68fc04b-be06-4f7b-a315-7d5be8dbe74a">
+
+
+
+#### 스프링이 제공하는 예외 변환기
+
+**스프링은 데이터베이스에서 발생하는 오류 코드를 스프링이 정의한 예외로 자동으로 변환해주는 변환기를 제공한다.**
+예제를 통해 확인해보자
+
+
+
+#### 예제
+
+[SpringExceptionTranslatorTest]
+
+* sqlExceptionErrorCode: 해당 테스트는 SQL ErrorCode를 직접 확인해보는 테스트이다
+
+  * 이렇게 직접 예외를 확인하고, 스프링이 만들어준 예외(`BadSqlGrammarException`)로 변환하는 것은 현실성이 없다.
+  * <u>하나하나 다 에러를 확인하고 그에 맞게 스프링이 제공하는 예외를 던져줘야한다.</u>
+
+* **exceptionTranslator: 해당 테스트는 스프링이 에러를 확인하고 적절한 에러로 변환시켜준다.**
+
+  * 아래처럼 단 2줄로 적절한 에러를 데이터베이스에 맞게 변환해서 던져준다.
+
+  * DataAccessException은 최상위 부모 타입이지만, 실제 구현체는 Assertions.assertThat으로 확인해보면 `BadSqlGrammarException`이라는 것을 확인할 수 있다.
+
+    ```java
+    SQLErrorCodeSQLExceptionTranslator exTranslator = new SQLErrorCodeSQLExceptionTranslator(dataSource);
+    DataAccessException resultEx = exTranslator.translate("select", sql, e);
+    ```
+
+```java
+package hello.jdbc.exception.translator;
+
+import hello.jdbc.connection.ConnectionConst;
+import lombok.extern.slf4j.Slf4j;
+import org.assertj.core.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.BadSqlGrammarException;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.support.SQLErrorCodeSQLExceptionTranslator;
+
+import javax.sql.DataSource;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+
+import static hello.jdbc.connection.ConnectionConst.*;
+import static org.assertj.core.api.Assertions.*;
+
+@Slf4j
+public class SpringExceptionTranslatorTest {
+
+    DataSource dataSource;
+
+    @BeforeEach
+    void init() {
+        dataSource = new DriverManagerDataSource(URL, USERNAME, PASSWORD);
+    }
+
+    /**
+     * SQL ErrorCode를 직접 확인하는 방법
+     * 직접 예외를 확인하고 하나하나 스프링이 만들어준 예외로 변환하는 것은 현실성이 없다.
+     */
+    @Test
+    void sqlExceptionErrorCode() {
+        String sql = "select bad grammar";
+
+        try {
+            Connection con = dataSource.getConnection();
+            PreparedStatement pstmt = con.prepareStatement(sql);
+            pstmt.executeQuery();
+        } catch (SQLException e) {
+            assertThat(e.getErrorCode()).isEqualTo(42122);
+//            throw new BadSqlGrammarException(e);
+            int errorCode = e.getErrorCode();
+            log.info("errorCode = {}", errorCode);
+            log.info("error", e);
+        }
+    }
+
+
+    /**
+     * 스프링이 제공하는 예외 변환기
+     */
+    @Test
+    void exceptionTranslator() {
+        String sql = "select bad grammar";
+
+        try {
+            Connection con = dataSource.getConnection();
+            PreparedStatement pstmt = con.prepareStatement(sql);
+            pstmt.executeQuery();
+        } catch (SQLException e) {
+            assertThat(e.getErrorCode()).isEqualTo(42122);
+
+            // org.springframework.jdbc.support.sql-error-codes.xml
+            SQLErrorCodeSQLExceptionTranslator exTranslator = new SQLErrorCodeSQLExceptionTranslator(dataSource);
+            DataAccessException resultEx = exTranslator.translate("select", sql, e);
+            log.info("resultEx", resultEx);
+            assertThat(resultEx.getClass()).isEqualTo(BadSqlGrammarException.class);
+        }
+    }
+}
+
+```
+
+
+
+#### 스프링이 적절한 예외로 변환해 줄 수 있는 비밀
+
+`org.springframework.jdbc.support.sql-error-codes.xml` 해당 파일에 비밀이 숨어있다.
+
+* 해당 파일에는 다양한 데이터베이스에 대한 에러코드를 정의하고 있다.
+* **스프링 SQL 예외 변환기는 SQL ErrorCode를 이 파일에 대입해서 어떤 스프링 데이터 접근 예외로 전환해야 할 지 찾아낸다.** 
+
+
+
+#### 정리
+
+* 스프링은 데이터 접근 계층에 대한 일관된 예외 추상화를 제공한다.
+* **스프링은 예외 변환기를 통해 SQLException의 ErrorCode에 맞는 적절한 스프링 데이터 접근 예외로 변환해준다.**
+* 이제 서비스, 컨틀로럴 계층에서 예외 처리가 필요하면 특정 기술에 종속적인 SQLException 같은 예외를 사용하는 것이 아니라, <u>스프링이 제공하는 데이터 접근 예외를 사용하면 된다.</u>
+  * 스프링의 예외 추상화 덕분에 특정 기술에 종속적이지 않게 된다.
+
+
+
