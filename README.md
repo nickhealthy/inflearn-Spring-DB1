@@ -4517,3 +4517,300 @@ public class SpringExceptionTranslatorTest {
 
 
 
+## 스프링 예외 추상화 적용
+
+이제 애플리케이션에 스프링이 제공하는 데이터 접근 예외 추상화와 SQL 예외 변환기를 적용해보자
+
+
+
+#### 예제
+
+[MemberRepositoryV4_2]
+
+* 예외를 던지는 부분을 `throw exTranslator.translate(...)`으로 변경하여 **특정 기술의 특정 예외를 잡을 필요 없이 스프링의 예외 추상화를 통해 특정 기술에 종속적이지 않게 되었다.**
+
+```java
+package hello.jdbc.repository;
+
+import hello.jdbc.domain.Member;
+import hello.jdbc.repository.ex.MyDbException;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.datasource.DataSourceUtils;
+import org.springframework.jdbc.support.JdbcUtils;
+import org.springframework.jdbc.support.SQLErrorCodeSQLExceptionTranslator;
+import org.springframework.jdbc.support.SQLExceptionTranslator;
+
+import javax.sql.DataSource;
+import java.sql.*;
+import java.util.NoSuchElementException;
+
+/**
+ * SQLExceptionTranslator 추가
+ * - 스프링이 제공하는 예외 변환기
+ * - 데이터 접근 예외 추상화 적용
+ */
+@Slf4j
+public class MemberRepositoryV4_2 implements MemberRepository {
+
+    private final DataSource dataSource;
+    private final SQLExceptionTranslator exTranslator;
+
+    public MemberRepositoryV4_2(DataSource dataSource) {
+        this.dataSource = dataSource;
+        this.exTranslator = new SQLErrorCodeSQLExceptionTranslator(dataSource);
+    }
+
+    private Connection getConnection() {
+        Connection con = DataSourceUtils.getConnection(dataSource);
+        log.info("get connection = {}, class = {}", con, con.getClass());
+        return con;
+    }
+
+    private void close(Connection con, Statement stmt, ResultSet rs) {
+        JdbcUtils.closeResultSet(rs);
+        JdbcUtils.closeStatement(stmt);
+        DataSourceUtils.releaseConnection(con, dataSource);
+    }
+
+    @Override
+    public Member save(Member member) {
+        String sql = "insert into member (member_id, money) values (?, ?)";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, member.getMemberId());
+            pstmt.setInt(2, member.getMoney());
+            pstmt.executeUpdate();
+            return member;
+
+        } catch (SQLException e) {
+            throw exTranslator.translate("save", sql, e);
+        } finally {
+            close(con, pstmt, null);
+        }
+    }
+
+    @Override
+    public Member findById(String memberId) {
+        String sql = "select * from member where member_id = ?";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+        ResultSet rs = null;
+
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, memberId);
+            rs = pstmt.executeQuery();
+
+            if (rs.next()) {
+                Member member = new Member();
+                member.setMemberId(rs.getString("member_id"));
+                member.setMoney(rs.getInt("money"));
+                return member;
+            } else {
+                throw new NoSuchElementException("member not found memberId = {}" + memberId);
+            }
+
+        } catch (SQLException e) {
+            throw exTranslator.translate("findById", sql, e);
+        } finally {
+            close(con, pstmt, rs);
+        }
+    }
+
+    @Override
+    public void update(String memberId, int money) {
+        String sql = "update member set money = ? where member_id = ?";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setInt(1, money);
+            pstmt.setString(2, memberId);
+            int resultSize = pstmt.executeUpdate();
+            log.info("resultSize = {}", resultSize);
+
+        } catch (SQLException e) {
+            throw exTranslator.translate("update", sql, e);
+        } finally {
+            close(con, pstmt, null);
+
+        }
+    }
+
+
+    @Override
+    public void delete(String memberId) {
+        String sql = "delete from member where member_id = ?";
+
+        Connection con = null;
+        PreparedStatement pstmt = null;
+
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, memberId);
+            pstmt.executeUpdate();
+
+        } catch (SQLException e) {
+            throw exTranslator.translate("delete", sql, e);
+        } finally {
+            close(con, pstmt, null);
+        }
+    }
+}
+```
+
+
+
+
+
+[MemberServiceV4Test]
+
+* `MemberRepository` 인터페이스가 제공되므로 스프링 빈에 등록할 빈만 `MemberRepositoryV4_1`에서 `MemberRepositoryV4_2`로 교체하면 리포지토리를 변경해서 테스트를 확인할 수 있다.
+
+```java
+package hello.jdbc.service;
+
+import hello.jdbc.domain.Member;
+import hello.jdbc.repository.MemberRepository;
+import hello.jdbc.repository.MemberRepositoryV3;
+import hello.jdbc.repository.MemberRepositoryV4_1;
+import hello.jdbc.repository.MemberRepositoryV4_2;
+import lombok.extern.slf4j.Slf4j;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.aop.support.AopUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+
+import javax.sql.DataSource;
+import java.sql.SQLException;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * 예외 누수 문제 해결
+ * SQLException 제거
+ *
+ * MemberRepository 인터페이스 의존
+ */
+@Slf4j
+@SpringBootTest
+class MemberServiceV4Test {
+
+    public static final String MEMBER_A = "memberA";
+    public static final String MEMBER_B = "memberB";
+    public static final String MEMBER_EX = "ex";
+
+    @Autowired
+    MemberRepository memberRepository;
+    @Autowired
+    MemberServiceV4 memberService;
+
+    @AfterEach
+    void afterEach() throws SQLException {
+        memberRepository.delete(MEMBER_A);
+        memberRepository.delete(MEMBER_B);
+        memberRepository.delete(MEMBER_EX);
+    }
+
+    @TestConfiguration
+    static class TestConfig {
+
+        private final DataSource dataSource;
+
+        public TestConfig(DataSource dataSource) {
+            this.dataSource = dataSource;
+        }
+
+
+        @Bean
+        MemberRepository memberRepository() {
+//            return new MemberRepositoryV4_1(dataSource); // 단순 예외 반환
+            return new MemberRepositoryV4_2(dataSource); // 스프링 예외 변환
+        }
+
+        @Bean
+        MemberServiceV4 memberServiceV4() {
+            return new MemberServiceV4(memberRepository());
+        }
+
+    }
+
+    @Test
+    void AopCheck() {
+        log.info("memberService class = {}", memberService.getClass());
+        log.info("memberRepository class = {}", memberRepository.getClass());
+        assertThat(AopUtils.isAopProxy(memberService)).isTrue();
+        assertThat(AopUtils.isAopProxy(memberRepository)).isFalse();
+    }
+
+    @Test
+    @DisplayName("정상 이체")
+    void accountTransfer() throws SQLException {
+        // given
+        Member memberA = new Member(MEMBER_A, 10000);
+        Member memberB = new Member(MEMBER_B, 10000);
+        memberRepository.save(memberA);
+        memberRepository.save(memberB);
+
+        // when
+        memberService.accountTransfer(memberA.getMemberId(), memberB.getMemberId(), 2000);
+
+        // then
+        Member findMemberA = memberRepository.findById(memberA.getMemberId());
+        Member findMemberB = memberRepository.findById(memberB.getMemberId());
+        assertThat(findMemberA.getMoney()).isEqualTo(8000);
+        assertThat(findMemberB.getMoney()).isEqualTo(12000);
+    }
+
+    @Test
+    @DisplayName("이체중 예외 발생")
+    void accountTransferEx() throws SQLException {
+        // given: 다음 데이터를 저장해서 테스트를 준비한다.
+        Member memberA = new Member(MEMBER_A, 10000);
+        Member memberEx = new Member(MEMBER_EX, 10000);
+        memberRepository.save(memberA);
+        memberRepository.save(memberEx);
+
+        // when: 계좌이체 로직을 실행한다.
+        // memberEx 회원의 ID는 ex 이므로 중간에 예외가 발생한다.
+        assertThatThrownBy(() ->
+                memberService.accountTransfer(memberA.getMemberId(), memberEx.getMemberId(), 2000))
+                .isInstanceOf(IllegalStateException.class);
+
+        // then: memberA의 돈이 롤백 되어야함
+        Member findMemberA = memberRepository.findById(memberA.getMemberId());
+        Member findMemberB = memberRepository.findById(memberEx.getMemberId());
+        assertThat(findMemberA.getMoney()).isEqualTo(10000);
+        assertThat(findMemberB.getMoney()).isEqualTo(10000);
+    }
+}
+```
+
+
+
+#### 정리
+
+* 스프링이 예외를 추상화한 덕분에, 서비스 계층은 특정 리포지토리의 구현 기술과 예외에 종속적이지 않게 되었다.
+  * 따라서 서비스 계층은 특정 구현 기술이 변경되어도 그대로 유지할 수 있다.
+  * **다시 DI를 제대로 활용할 수 있게 된 것이다.**
+* 추가로 서비스 계층에서 예외를 잡아 복구해야 하는 경우, 예외가 스프링이 제공하는 데이터 접근 예외로 변경되어서 서비스 계층에 넘어오기 때문에 필요한 경우 예외를 잡아서 복구하면 된다.
+
+
+

@@ -4,6 +4,7 @@ import hello.jdbc.domain.Member;
 import hello.jdbc.repository.MemberRepository;
 import hello.jdbc.repository.MemberRepositoryV3;
 import hello.jdbc.repository.MemberRepositoryV4_1;
+import hello.jdbc.repository.MemberRepositoryV4_2;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -40,7 +41,7 @@ class MemberServiceV4Test {
     MemberServiceV4 memberService;
 
     @AfterEach
-    void afterEach() throws SQLException {
+    void afterEach()  {
         memberRepository.delete(MEMBER_A);
         memberRepository.delete(MEMBER_B);
         memberRepository.delete(MEMBER_EX);
@@ -58,8 +59,8 @@ class MemberServiceV4Test {
 
         @Bean
         MemberRepository memberRepository() {
-            // 단순 예외 반환
-            return new MemberRepositoryV4_1(dataSource);
+//            return new MemberRepositoryV4_1(dataSource); // 단순 예외 반환
+            return new MemberRepositoryV4_2(dataSource); // 스프링 예외 변환
         }
 
         @Bean
@@ -79,7 +80,7 @@ class MemberServiceV4Test {
 
     @Test
     @DisplayName("정상 이체")
-    void accountTransfer() throws SQLException {
+    void accountTransfer() {
         // given
         Member memberA = new Member(MEMBER_A, 10000);
         Member memberB = new Member(MEMBER_B, 10000);
@@ -98,7 +99,7 @@ class MemberServiceV4Test {
 
     @Test
     @DisplayName("이체중 예외 발생")
-    void accountTransferEx() throws SQLException {
+    void accountTransferEx() {
         // given: 다음 데이터를 저장해서 테스트를 준비한다.
         Member memberA = new Member(MEMBER_A, 10000);
         Member memberEx = new Member(MEMBER_EX, 10000);
