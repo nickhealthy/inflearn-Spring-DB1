@@ -4814,3 +4814,130 @@ class MemberServiceV4Test {
 
 
 
+## JDBC 반복 문제 해결 - JdbcTemplate
+
+지금까지 서비스 계층의 순수함을 유지하기 위해 많은 부분을 수정했지만 리포지토리에서 JDBC를 사용하기 때문에 반복되는 문제가 있다. `JdbcTemplate` 통해 반복되는 문제를 해결해보자.
+
+
+
+#### JDBC 반복 문제
+
+* 커넥션 조회, 커넥션 동기화
+* `PrepareStatement` 생성 및 파라미터 바인딩
+* 쿼리 실행
+* 결과 바인딩
+* 예외 발생 시 스프링 예외 변환기 실행
+* 리소스 종료
+
+
+
+**이러한 반복 문제를 해결하기 위한 효과적인 방법은 바로 템플릿 콜백 패턴이다.**
+스프링은 JDBC 반복 문제를 해결하기 위해 `JdbcTemplate`이라는 템플릿을 제공한다.
+
+
+
+#### 예제
+
+`JdbcTemplate`을 사용하여 반복되는 코드 없애기
+
+[MemberRepositoryV5]
+
+```java
+package hello.jdbc.repository;
+
+import hello.jdbc.domain.Member;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.datasource.DataSourceUtils;
+import org.springframework.jdbc.support.JdbcUtils;
+import org.springframework.jdbc.support.SQLErrorCodeSQLExceptionTranslator;
+import org.springframework.jdbc.support.SQLExceptionTranslator;
+
+import javax.sql.DataSource;
+import java.sql.*;
+import java.util.NoSuchElementException;
+
+/**
+ * JdbcTemplate 사용
+ */
+@Slf4j
+public class MemberRepositoryV5 implements MemberRepository {
+
+    private final JdbcTemplate template;
+
+    public MemberRepositoryV5(DataSource dataSource) {
+        this.template = new JdbcTemplate(dataSource);
+    }
+
+    @Override
+    public Member save(Member member) {
+        String sql = "insert into member (member_id, money) values (?, ?)";
+        template.update(sql, member.getMemberId(), member.getMoney());
+        return member;
+    }
+
+    @Override
+    public Member findById(String memberId) {
+        String sql = "select * from member where member_id = ?";
+        return template.queryForObject(sql, memberRowMapper(), memberId);
+    }
+
+    private RowMapper<Member> memberRowMapper() {
+        return ((rs, rowNum) -> {
+            Member member = new Member();
+            member.setMemberId(rs.getString("member_id"));
+            member.setMoney(rs.getInt("money"));
+            return member;
+        });
+    }
+
+    @Override
+    public void update(String memberId, int money) {
+        String sql = "update member set money = ? where member_id = ?";
+        template.update(sql, money, memberId);
+    }
+
+
+    @Override
+    public void delete(String memberId) {
+        String sql = "delete from member where member_id = ?";
+        template.update(sql, memberId);
+    }
+}
+```
+
+
+
+[MemberServiceV4Test]
+
+JdbcTemplate 적용을 위해 빈을 변경(새로운 구현체)
+
+```java
+@Bean
+MemberRepository memberRepository() {
+//            return new MemberRepositoryV4_1(dataSource); // 단순 예외 반환
+//            return new MemberRepositoryV4_2(dataSource); // 스프링 예외 변환
+    return new MemberRepositoryV5(dataSource); // JdbcTemplate
+}
+```
+
+
+
+#### 정리
+
+`JdbcTemplate`은 JDBC로 개발할 때 발생하는 반복을 대부분 해결해준다.
+
+* 트랜잭션을 위한 커넥션 동기화
+* 예외 발생 시 스프링 예외 변환기 등록
+* 리소스 반환 등
+
+
+
+## 최종 정리
+
+* 서비스 계층의 순수성
+  * **트랜잭션 추상화 + 트랜잭션 AOP 덕분에 서비스 계층의 순수성을 최대한 유지하면서 서비스 계층에서 트랜잭션을 사용할 수 있다.**
+  * **스프링이 제공하는 예외 추상화와 예외 변환기 덕분에, 데이터 접근 기술이 변경되어도 서비스 계층의 순수성을 유지하면서도 예외도 사용할 수 있다**.
+  * **서비스 계층이 리포지토리 인터페이스에 의존한 덕분에 향후 리포지토리가 다른 기술로 변경되어도 서비스 계층을 순수하게 유지할 수 있다.**
+* 리포지토리에서 JDBC를 사용하는 반복 코드가 `JdbcTemplate`으로 대부분 제거되었다.
